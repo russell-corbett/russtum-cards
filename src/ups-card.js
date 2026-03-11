@@ -325,6 +325,10 @@ class UpsCard extends HTMLElement {
     return 3;
   }
 
+  static getConfigElement() {
+    return document.createElement('ups-card-editor');
+  }
+
   static getStubConfig() {
     return {
       title: 'Server UPS',
@@ -337,3 +341,116 @@ class UpsCard extends HTMLElement {
 }
 
 customElements.define('ups-card', UpsCard);
+
+// ── UPS Card Editor ───────────────────────────────────────────────────────────
+
+class UpsCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._config = {};
+    this._hass = null;
+    this._configStr = '';
+  }
+
+  setConfig(config) {
+    const incoming = JSON.stringify(config);
+    if (this._configStr === incoming) return;
+    this._configStr = incoming;
+    this._config = config;
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this.shadowRoot?.querySelectorAll('ha-entity-picker').forEach(p => { p.hass = hass; });
+  }
+
+  _fire(config) {
+    this._config = config;
+    this._configStr = JSON.stringify(config);
+    this.dispatchEvent(new CustomEvent('config-changed', {
+      detail: { config },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _bindText(id, key, type) {
+    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
+      const raw = (ev.detail?.value ?? '').trim();
+      const config = { ...this._config };
+      if (type === 'number') {
+        if (raw === '') delete config[key]; else config[key] = Number(raw);
+      } else {
+        if (raw) config[key] = raw; else delete config[key];
+      }
+      this._fire(config);
+    });
+  }
+
+  _bindEntityPicker(id, key) {
+    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
+      const val = ev.detail.value;
+      const config = { ...this._config };
+      if (val) config[key] = val; else delete config[key];
+      this._fire(config);
+    });
+  }
+
+  _render() {
+    const c = this._config;
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: block; padding: 0 0 16px; }
+
+        .section-title {
+          font-size: 0.78em;
+          font-weight: 600;
+          color: var(--secondary-text-color);
+          text-transform: uppercase;
+          letter-spacing: 0.07em;
+          padding: 16px 0 8px;
+          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+          margin-bottom: 12px;
+        }
+
+        .row { display: flex; gap: 8px; margin-bottom: 8px; }
+        ha-entity-picker { display: block; width: 100%; margin-bottom: 8px; }
+        ha-textfield { display: block; width: 100%; }
+      </style>
+
+      <!-- Basic -->
+      <div class="section-title">Basic</div>
+      <ha-textfield id="f-title" label="Title" value="${c.title || ''}"></ha-textfield>
+
+      <!-- Entities -->
+      <div class="section-title">Entities</div>
+      <ha-entity-picker id="f-status"   label="Status Entity (NUT status_data)"    value="${c.status_entity || ''}"   allow-custom-entity></ha-entity-picker>
+      <ha-entity-picker id="f-battery"  label="Battery Entity (%)"                 value="${c.battery_entity || ''}"  allow-custom-entity></ha-entity-picker>
+      <ha-entity-picker id="f-runtime"  label="Runtime Entity (seconds remaining)" value="${c.runtime_entity || ''}"  allow-custom-entity></ha-entity-picker>
+      <ha-entity-picker id="f-load"     label="Load Entity (%)"                    value="${c.load_entity || ''}";    allow-custom-entity></ha-entity-picker>
+
+      <!-- Thresholds -->
+      <div class="section-title">Thresholds</div>
+      <div class="row">
+        <ha-textfield id="f-bat-low"   label="Battery Low (%)"  type="number" min="0" max="100" value="${c.battery_low_threshold ?? 20}"></ha-textfield>
+        <ha-textfield id="f-load-warn" label="Load Warning (%)" type="number" min="0" max="100" value="${c.load_warn_threshold ?? 80}"></ha-textfield>
+      </div>
+    `;
+
+    if (this._hass) this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(p => { p.hass = this._hass; });
+
+    this._bindText('f-title', 'title');
+    this._bindText('f-bat-low', 'battery_low_threshold', 'number');
+    this._bindText('f-load-warn', 'load_warn_threshold', 'number');
+
+    this._bindEntityPicker('f-status',  'status_entity');
+    this._bindEntityPicker('f-battery', 'battery_entity');
+    this._bindEntityPicker('f-runtime', 'runtime_entity');
+    this._bindEntityPicker('f-load',    'load_entity');
+  }
+}
+
+customElements.define('ups-card-editor', UpsCardEditor);
