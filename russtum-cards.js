@@ -343,35 +343,28 @@ class NasCard extends HTMLElement {
           color: var(--primary-text-color);
         }
 
-        /* ── Network section ── */
-        .network-section {
-          margin-top: 12px;
-          padding-top: 10px;
-          border-top: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-        }
-        .network-label {
-          font-size: 0.68em;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          margin-bottom: 6px;
-        }
-        .network-links {
+        /* ── Network pills (header right) ── */
+        .header-network {
           display: flex;
           flex-wrap: wrap;
-          gap: 8px;
+          gap: 4px;
+          justify-content: flex-end;
+          align-items: flex-start;
+          flex-shrink: 0;
+          max-width: 45%;
         }
         .net-link {
           display: flex;
           align-items: center;
-          gap: 5px;
-          padding: 4px 10px;
+          gap: 4px;
+          padding: 3px 8px;
           border-radius: 20px;
           background: var(--secondary-background-color);
-          font-size: 0.78em;
+          font-size: 0.72em;
           font-weight: 500;
+          white-space: nowrap;
         }
-        .net-link ha-icon { --mdc-icon-size: 14px; }
+        .net-link ha-icon { --mdc-icon-size: 13px; }
         .net-link.live {
           color: var(--success-color, #4caf50);
           background: rgba(76, 175, 80, 0.1);
@@ -390,6 +383,16 @@ class NasCard extends HTMLElement {
             <div class="title">${title}</div>
             <div class="summary">${liveDrives} / ${totalDrives} drives live</div>
           </div>
+          ${showNetwork ? `
+          <div class="header-network">
+            ${netStats.map(iface => {
+              const cls = iface.stateValue === 'unavailable' ? 'unavailable' : iface.live ? 'live' : 'dead';
+              const icon = iface.live ? 'mdi:lan-connect' : 'mdi:lan-disconnect';
+              return `<div class="net-link ${cls}" title="${iface.name}: ${iface.stateValue}">
+                  <ha-icon icon="${icon}"></ha-icon>${iface.name}
+                </div>`;
+            }).join('')}
+          </div>` : ''}
         </div>
 
         <div class="drives-grid">
@@ -436,21 +439,6 @@ class NasCard extends HTMLElement {
           </div>` : ''}
         </div>` : ''}
 
-        ${showNetwork ? `
-        <div class="network-section">
-          <div class="network-label">Network</div>
-          <div class="network-links">
-            ${netStats.map(iface => {
-              const cls = iface.stateValue === 'unavailable' ? 'unavailable' : iface.live ? 'live' : 'dead';
-              const icon = iface.live ? 'mdi:lan-connect' : 'mdi:lan-disconnect';
-              return `
-                <div class="net-link ${cls}" title="${iface.name}: ${iface.stateValue}">
-                  <ha-icon icon="${icon}"></ha-icon>
-                  ${iface.name}
-                </div>`;
-            }).join('')}
-          </div>
-        </div>` : ''}
 
       </ha-card>
     `;
