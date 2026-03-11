@@ -13,22 +13,44 @@
 /**
  * Configuration:
  *   type: custom:nas-card
- *   title: My NAS                         # Card title
- *   total_drives: 8                       # Total bay count (visual slots)
- *   live_states:                          # States that count as "live"
- *     - active
- *     - on
+ *   title: My NAS
+ *   total_drives: 8                        # Total bay count (visual slots)
+ *   live_states: [active, on]              # Drive states that count as "live"
  *   drive_entity_prefix: sensor.nas_drive_ # Auto-detect drives by prefix
  *   drive_entity_suffix: _status           # Optional suffix filter
- *   drives:                               # Explicit drive list (manual overrides)
+ *   drives:                                # Explicit drive list (merged with prefix discovery)
  *     - entity: sensor.nas_drive_1_status
  *       name: Bay 1
- *     - entity: sensor.nas_drive_2_status
- *       name: Bay 2
  *
- * Hybrid mode: if both `drives` and `drive_entity_prefix` are set, explicit
- * entries take priority and the prefix fills in any remaining discovered entities.
+ *   # Optional extras:
+ *   temperature_entity: sensor.nas_cpu_temp  # System temperature (°C)
+ *   temperature_warn: 60                     # Warning threshold °C (default 60)
+ *   temperature_high: 75                     # Critical threshold °C (default 75)
+ *
+ *   uptime_entity: sensor.nas_uptime         # Uptime in seconds, or formatted string
+ *
+ *   network_interfaces:                      # Explicit network link list
+ *     - entity: binary_sensor.nas_eth0
+ *       name: eth0
+ *   network_entity_prefix: binary_sensor.nas_ # Auto-detect network links by prefix
+ *   network_entity_suffix: _link
+ *   network_live_states: [on, connected, up]  # States that count as "live" (default: on, connected, up)
  */
+
+function formatUptime(val) {
+  if (val == null) return '—';
+  const n = Number(val);
+  if (!isNaN(n)) {
+    const days  = Math.floor(n / 86400);
+    const hours = Math.floor((n % 86400) / 3600);
+    const mins  = Math.floor((n % 3600) / 60);
+    if (days > 0)  return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
+  }
+  return String(val);
+}
+
 class NasCard extends HTMLElement {
   constructor() {
     super();
@@ -49,53 +71,44 @@ class NasCard extends HTMLElement {
   set hass(hass) {
     const oldHass = this._hass;
     this._hass = hass;
-
     if (!this._config) return;
 
-    // Skip re-render if no relevant entity state changed
     if (oldHass) {
-      const entities = this._getDriveEntities().map(d => d.entity).filter(Boolean);
-      const changed = entities.some(id => hass.states[id] !== oldHass.states[id]);
+      const watched = [
+        ...this._getDriveEntities().map(d => d.entity).filter(Boolean),
+        ...this._getNetworkEntities().map(n => n.entity).filter(Boolean),
+        this._config.temperature_entity,
+        this._config.uptime_entity,
+      ].filter(Boolean);
+      const changed = watched.some(id => hass.states[id] !== oldHass.states[id]);
       if (!changed) return;
     }
 
     this._render();
   }
 
+  // ── Drive helpers ────────────────────────────────────────────────────────
+
   _getDriveEntities() {
     const { config, _hass: hass } = this;
-    const explicitDrives = (config.drives || []).map(d => ({
+    const explicit = (config.drives || []).map(d => ({
       entity: d.entity,
-      name: d.name || this._nameFromEntity(d.entity, config),
+      name: d.name || this._nameFromEntity(d.entity, config.drive_entity_prefix, config.drive_entity_suffix),
     }));
 
-    if (!config.drive_entity_prefix || !hass) return explicitDrives;
+    if (!config.drive_entity_prefix || !hass) return explicit;
 
     const prefix = config.drive_entity_prefix;
     const suffix = config.drive_entity_suffix || '';
-    const explicitIds = new Set(explicitDrives.map(d => d.entity));
+    const explicitIds = new Set(explicit.map(d => d.entity));
 
     const discovered = Object.keys(hass.states)
       .filter(id => id.startsWith(prefix) && (suffix === '' || id.endsWith(suffix)))
       .filter(id => !explicitIds.has(id))
       .sort()
-      .map(id => ({
-        entity: id,
-        name: this._nameFromEntity(id, config),
-      }));
+      .map(id => ({ entity: id, name: this._nameFromEntity(id, prefix, suffix) }));
 
-    return [...explicitDrives, ...discovered];
-  }
-
-  _nameFromEntity(entityId, config) {
-    let name = entityId;
-    if (config.drive_entity_prefix) name = name.replace(config.drive_entity_prefix, '');
-    if (config.drive_entity_suffix) name = name.replace(new RegExp(`${config.drive_entity_suffix}$`), '');
-    return name.replace(/_/g, ' ').trim() || entityId;
-  }
-
-  get config() {
-    return this._config;
+    return [...explicit, ...discovered];
   }
 
   _isLive(stateValue) {
@@ -109,55 +122,123 @@ class NasCard extends HTMLElement {
     return this._isLive(stateValue) ? 'live' : 'dead';
   }
 
+  // ── Network helpers ──────────────────────────────────────────────────────
+
+  _getNetworkEntities() {
+    const { config, _hass: hass } = this;
+    const explicit = (config.network_interfaces || []).map(n => ({
+      entity: n.entity,
+      name: n.name || this._nameFromEntity(n.entity, config.network_entity_prefix, config.network_entity_suffix),
+    }));
+
+    if (!config.network_entity_prefix || !hass) return explicit;
+
+    const prefix = config.network_entity_prefix;
+    const suffix = config.network_entity_suffix || '';
+    const explicitIds = new Set(explicit.map(n => n.entity));
+
+    const discovered = Object.keys(hass.states)
+      .filter(id => id.startsWith(prefix) && (suffix === '' || id.endsWith(suffix)))
+      .filter(id => !explicitIds.has(id))
+      .sort()
+      .map(id => ({ entity: id, name: this._nameFromEntity(id, prefix, suffix) }));
+
+    return [...explicit, ...discovered];
+  }
+
+  _isLinkLive(stateValue) {
+    const liveStates = this._config.network_live_states || ['on', 'connected', 'up'];
+    return liveStates.includes(stateValue);
+  }
+
+  // ── Shared helpers ───────────────────────────────────────────────────────
+
+  _nameFromEntity(entityId, prefix, suffix) {
+    let name = entityId;
+    if (prefix) name = name.replace(prefix, '');
+    if (suffix) name = name.replace(new RegExp(`${suffix}$`), '');
+    return name.replace(/_/g, ' ').trim() || entityId;
+  }
+
+  _stateVal(entityId) {
+    if (!entityId || !this._hass) return null;
+    return this._hass.states[entityId]?.state ?? null;
+  }
+
+  get config() { return this._config; }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+
   _render() {
     if (!this._config) return;
 
     const config = this._config;
     const hass = this._hass;
+
+    // Drives
     const drives = hass ? this._getDriveEntities() : [];
     const totalDrives = config.total_drives || drives.length;
-
     let liveDrives = 0;
     const driveSlots = drives.map(drive => {
-      const stateObj = hass?.states[drive.entity];
-      const stateValue = stateObj?.state ?? 'unavailable';
+      const stateValue = hass?.states[drive.entity]?.state ?? 'unavailable';
       const live = this._isLive(stateValue);
       if (live) liveDrives++;
       return { ...drive, stateValue, live };
     });
-
-    // Pad with empty slots up to totalDrives
     while (driveSlots.length < totalDrives) {
-      const bay = driveSlots.length + 1;
-      driveSlots.push({ entity: null, name: `Bay ${bay}`, stateValue: 'empty', live: false });
+      driveSlots.push({ entity: null, name: `Bay ${driveSlots.length + 1}`, stateValue: 'empty', live: false });
     }
+    const healthPct = totalDrives > 0 ? Math.round((liveDrives / totalDrives) * 100) : 0;
+
+    // Temperature
+    const tempWarn = config.temperature_warn ?? 60;
+    const tempHigh = config.temperature_high ?? 75;
+    const rawTemp = this._stateVal(config.temperature_entity);
+    const tempVal = rawTemp != null && rawTemp !== 'unavailable' ? parseFloat(rawTemp) : null;
+    const tempUnit = config.temperature_entity && hass?.states[config.temperature_entity]?.attributes?.unit_of_measurement || '°C';
+    const tempColor = tempVal == null
+      ? 'var(--secondary-text-color)'
+      : tempVal >= tempHigh
+        ? 'var(--error-color, #f44336)'
+        : tempVal >= tempWarn
+          ? 'var(--warning-color, #ff9800)'
+          : 'var(--success-color, #4caf50)';
+    const tempIcon = tempVal != null && tempVal >= tempWarn ? 'mdi:thermometer-alert' : 'mdi:thermometer';
+
+    // Uptime
+    const rawUptime = this._stateVal(config.uptime_entity);
+
+    // Network
+    const netInterfaces = hass ? this._getNetworkEntities() : [];
+    const netStats = netInterfaces.map(iface => {
+      const stateValue = hass?.states[iface.entity]?.state ?? 'unavailable';
+      const live = stateValue !== 'unavailable' && stateValue !== 'unknown' && this._isLinkLive(stateValue);
+      return { ...iface, stateValue, live };
+    });
 
     const title = config.title || 'NAS';
-    const healthPct = totalDrives > 0 ? Math.round((liveDrives / totalDrives) * 100) : 0;
+    const showStats = config.temperature_entity || config.uptime_entity;
+    const showNetwork = netInterfaces.length > 0;
 
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
 
-        ha-card {
-          padding: 16px 16px 12px;
-        }
+        ha-card { padding: 16px 16px 12px; }
 
+        /* ── Header ── */
         .header {
           display: flex;
           align-items: center;
           gap: 12px;
           margin-bottom: 16px;
         }
-
         .header ha-icon {
           --mdc-icon-size: 36px;
           color: var(--primary-color);
           flex-shrink: 0;
         }
-
         .header-info { flex: 1; min-width: 0; }
-
         .title {
           font-size: 1.1em;
           font-weight: 600;
@@ -166,19 +247,18 @@ class NasCard extends HTMLElement {
           overflow: hidden;
           text-overflow: ellipsis;
         }
-
         .summary {
           font-size: 0.85em;
           color: var(--secondary-text-color);
           margin-top: 2px;
         }
 
+        /* ── Drive grid ── */
         .drives-grid {
           display: grid;
           grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
           gap: 6px;
         }
-
         .drive {
           display: flex;
           flex-direction: column;
@@ -187,16 +267,12 @@ class NasCard extends HTMLElement {
           padding: 8px 4px 6px;
           border-radius: 8px;
           background: var(--secondary-background-color);
-          transition: background 0.2s;
         }
-
         .drive ha-icon { --mdc-icon-size: 28px; }
-
-        .drive.live ha-icon   { color: var(--success-color, #4caf50); }
-        .drive.dead ha-icon   { color: var(--error-color, #f44336); }
+        .drive.live ha-icon        { color: var(--success-color, #4caf50); }
+        .drive.dead ha-icon        { color: var(--error-color, #f44336); }
         .drive.unavailable ha-icon { color: var(--warning-color, #ff9800); }
-        .drive.empty ha-icon  { color: var(--disabled-text-color, #9e9e9e); opacity: 0.4; }
-
+        .drive.empty ha-icon       { color: var(--disabled-text-color, #9e9e9e); opacity: 0.4; }
         .drive-name {
           font-size: 0.65em;
           color: var(--secondary-text-color);
@@ -207,17 +283,16 @@ class NasCard extends HTMLElement {
           width: 100%;
           text-transform: capitalize;
         }
+        .drive.live .drive-name { color: var(--success-color, #4caf50); }
+        .drive.dead .drive-name { color: var(--error-color, #f44336); }
 
-        .drive.live .drive-name   { color: var(--success-color, #4caf50); }
-        .drive.dead .drive-name   { color: var(--error-color, #f44336); }
-
+        /* ── Health bar ── */
         .progress-wrap {
           margin-top: 12px;
           display: flex;
           align-items: center;
           gap: 8px;
         }
-
         .progress-bar {
           flex: 1;
           height: 6px;
@@ -225,17 +300,14 @@ class NasCard extends HTMLElement {
           border-radius: 3px;
           overflow: hidden;
         }
-
         .progress-fill {
           height: 100%;
           border-radius: 3px;
           background: var(--success-color, #4caf50);
           transition: width 0.5s ease, background 0.3s;
         }
-
         .progress-fill.warn  { background: var(--warning-color, #ff9800); }
         .progress-fill.error { background: var(--error-color, #f44336); }
-
         .progress-label {
           font-size: 0.75em;
           font-weight: 600;
@@ -243,6 +315,72 @@ class NasCard extends HTMLElement {
           min-width: 32px;
           text-align: right;
         }
+
+        /* ── Stats row (temp + uptime) ── */
+        .stats-row {
+          display: flex;
+          gap: 16px;
+          margin-top: 12px;
+          padding-top: 10px;
+          border-top: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        }
+        .stat {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex: 1;
+        }
+        .stat ha-icon { --mdc-icon-size: 18px; }
+        .stat-label {
+          font-size: 0.68em;
+          color: var(--secondary-text-color);
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+        .stat-value {
+          font-size: 0.88em;
+          font-weight: 600;
+          color: var(--primary-text-color);
+        }
+
+        /* ── Network section ── */
+        .network-section {
+          margin-top: 12px;
+          padding-top: 10px;
+          border-top: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        }
+        .network-label {
+          font-size: 0.68em;
+          color: var(--secondary-text-color);
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          margin-bottom: 6px;
+        }
+        .network-links {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .net-link {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 4px 10px;
+          border-radius: 20px;
+          background: var(--secondary-background-color);
+          font-size: 0.78em;
+          font-weight: 500;
+        }
+        .net-link ha-icon { --mdc-icon-size: 14px; }
+        .net-link.live {
+          color: var(--success-color, #4caf50);
+          background: rgba(76, 175, 80, 0.1);
+        }
+        .net-link.dead {
+          color: var(--error-color, #f44336);
+          background: rgba(244, 67, 54, 0.08);
+        }
+        .net-link.unavailable { color: var(--disabled-text-color, #9e9e9e); }
       </style>
 
       <ha-card>
@@ -258,9 +396,7 @@ class NasCard extends HTMLElement {
           ${driveSlots.map(drive => {
             const cls = this._driveStatusClass(drive.stateValue);
             const icon = drive.stateValue === 'empty' ? 'mdi:harddisk-plus' : 'mdi:harddisk';
-            const tooltip = drive.entity
-              ? `${drive.name}: ${drive.stateValue}`
-              : `${drive.name} (empty)`;
+            const tooltip = drive.entity ? `${drive.name}: ${drive.stateValue}` : `${drive.name} (empty)`;
             return `
               <div class="drive ${cls}" title="${tooltip}">
                 <ha-icon icon="${icon}"></ha-icon>
@@ -273,10 +409,49 @@ class NasCard extends HTMLElement {
         <div class="progress-wrap">
           <div class="progress-bar">
             <div class="progress-fill ${healthPct < 50 ? 'error' : healthPct < 80 ? 'warn' : ''}"
-                 style="width: ${healthPct}%"></div>
+                 style="width:${healthPct}%"></div>
           </div>
           <span class="progress-label">${healthPct}%</span>
         </div>` : ''}
+
+        ${showStats ? `
+        <div class="stats-row">
+          ${config.temperature_entity ? `
+          <div class="stat">
+            <ha-icon icon="${tempIcon}" style="color:${tempColor}"></ha-icon>
+            <div>
+              <div class="stat-label">Temperature</div>
+              <div class="stat-value" style="color:${tempColor}">
+                ${tempVal != null ? tempVal + tempUnit : '—'}
+              </div>
+            </div>
+          </div>` : ''}
+          ${config.uptime_entity ? `
+          <div class="stat">
+            <ha-icon icon="mdi:clock-outline" style="color:var(--secondary-text-color)"></ha-icon>
+            <div>
+              <div class="stat-label">Uptime</div>
+              <div class="stat-value">${formatUptime(rawUptime)}</div>
+            </div>
+          </div>` : ''}
+        </div>` : ''}
+
+        ${showNetwork ? `
+        <div class="network-section">
+          <div class="network-label">Network</div>
+          <div class="network-links">
+            ${netStats.map(iface => {
+              const cls = iface.stateValue === 'unavailable' ? 'unavailable' : iface.live ? 'live' : 'dead';
+              const icon = iface.live ? 'mdi:lan-connect' : 'mdi:lan-disconnect';
+              return `
+                <div class="net-link ${cls}" title="${iface.name}: ${iface.stateValue}">
+                  <ha-icon icon="${icon}"></ha-icon>
+                  ${iface.name}
+                </div>`;
+            }).join('')}
+          </div>
+        </div>` : ''}
+
       </ha-card>
     `;
   }
@@ -375,11 +550,11 @@ function batteryIcon(pct, isCharging) {
 function formatRuntime(seconds) {
   if (seconds == null || isNaN(seconds)) return '—';
   const s = Math.round(Number(seconds));
-  if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   const h = Math.floor(m / 60);
   if (h > 0) return `${h}h ${m % 60}m`;
-  return `${m}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
 }
 
 class UpsCard extends HTMLElement {

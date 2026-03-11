@@ -74,11 +74,11 @@ function batteryIcon(pct, isCharging) {
 function formatRuntime(seconds) {
   if (seconds == null || isNaN(seconds)) return '—';
   const s = Math.round(Number(seconds));
-  if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   const h = Math.floor(m / 60);
   if (h > 0) return `${h}h ${m % 60}m`;
-  return `${m}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
 }
 
 class UpsCard extends HTMLElement {
