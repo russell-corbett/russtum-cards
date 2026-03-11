@@ -1,4 +1,6 @@
 {
   "name": "Russtum Cards",
-  "content_in_root": true
+  "filename": "russtum-cards.js",
+  "content_in_root": true,
+  "render_readme": true
 }
