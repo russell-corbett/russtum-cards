@@ -356,9 +356,9 @@ class UpsCardEditor extends HTMLElement {
   setConfig(config) {
     const incoming = JSON.stringify(config);
     if (this._configStr === incoming) return;
-    this._configStr = incoming;
     this._config = config;
     this._render();
+    this._fire(config); // Ensures HA's Save button is enabled immediately
   }
 
   set hass(hass) {

@@ -79,9 +79,6 @@ class NasCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error('Invalid configuration');
-    if (!config.drives && !config.drive_entity_prefix) {
-      throw new Error('NAS card: must specify either `drives` or `drive_entity_prefix`');
-    }
     this._config = config;
     this._render();
   }
@@ -109,25 +106,10 @@ class NasCard extends HTMLElement {
   // ── Drive helpers ────────────────────────────────────────────────────────
 
   _getDriveEntities() {
-    const { config, _hass: hass } = this;
-    const explicit = (config.drives || []).map(d => ({
+    return (this._config.drives || []).map(d => ({
       entity: d.entity,
-      name: d.name || this._nameFromEntity(d.entity, config.drive_entity_prefix, config.drive_entity_suffix),
+      name: d.name || this._nameFromEntity(d.entity),
     }));
-
-    if (!config.drive_entity_prefix || !hass) return explicit;
-
-    const prefix = config.drive_entity_prefix;
-    const suffix = config.drive_entity_suffix || '';
-    const explicitIds = new Set(explicit.map(d => d.entity));
-
-    const discovered = Object.keys(hass.states)
-      .filter(id => id.startsWith(prefix) && (suffix === '' || id.endsWith(suffix)))
-      .filter(id => !explicitIds.has(id))
-      .sort()
-      .map(id => ({ entity: id, name: this._nameFromEntity(id, prefix, suffix) }));
-
-    return [...explicit, ...discovered];
   }
 
   _isLive(stateValue) {
@@ -144,25 +126,10 @@ class NasCard extends HTMLElement {
   // ── Network helpers ──────────────────────────────────────────────────────
 
   _getNetworkEntities() {
-    const { config, _hass: hass } = this;
-    const explicit = (config.network_interfaces || []).map(n => ({
+    return (this._config.network_interfaces || []).map(n => ({
       entity: n.entity,
-      name: n.name || this._nameFromEntity(n.entity, config.network_entity_prefix, config.network_entity_suffix),
+      name: n.name || this._nameFromEntity(n.entity),
     }));
-
-    if (!config.network_entity_prefix || !hass) return explicit;
-
-    const prefix = config.network_entity_prefix;
-    const suffix = config.network_entity_suffix || '';
-    const explicitIds = new Set(explicit.map(n => n.entity));
-
-    const discovered = Object.keys(hass.states)
-      .filter(id => id.startsWith(prefix) && (suffix === '' || id.endsWith(suffix)))
-      .filter(id => !explicitIds.has(id))
-      .sort()
-      .map(id => ({ entity: id, name: this._nameFromEntity(id, prefix, suffix) }));
-
-    return [...explicit, ...discovered];
   }
 
   _isLinkLive(stateValue) {
@@ -172,11 +139,9 @@ class NasCard extends HTMLElement {
 
   // ── Shared helpers ───────────────────────────────────────────────────────
 
-  _nameFromEntity(entityId, prefix, suffix) {
-    let name = entityId;
-    if (prefix) name = name.replace(prefix, '');
-    if (suffix) name = name.replace(new RegExp(`${suffix}$`), '');
-    return name.replace(/_/g, ' ').trim() || entityId;
+  _nameFromEntity(entityId) {
+    if (!entityId) return '';
+    return entityId.split('.').pop().replace(/_/g, ' ').trim() || entityId;
   }
 
   _stateVal(entityId) {
@@ -504,8 +469,7 @@ class NasCard extends HTMLElement {
       title: 'My NAS',
       total_drives: 8,
       live_states: ['active', 'on'],
-      drive_entity_prefix: 'sensor.nas_drive_',
-      drive_entity_suffix: '_status',
+      drives: [],
     };
   }
 }
@@ -526,9 +490,9 @@ class NasCardEditor extends HTMLElement {
   setConfig(config) {
     const incoming = JSON.stringify(config);
     if (this._configStr === incoming) return; // Avoid re-render loops
-    this._configStr = incoming;
     this._config = config;
     this._render();
+    this._fire(config); // Ensures HA's Save button is enabled immediately
   }
 
   set hass(hass) {
@@ -663,16 +627,8 @@ class NasCardEditor extends HTMLElement {
       <ha-textfield id="f-live-states" label="Live States (comma-separated)" value="${liveStates}"></ha-textfield>
       <ha-entity-picker id="f-status-entity" label="NAS Status Entity (for icon color)" value="${c.status_entity || ''}" allow-custom-entity></ha-entity-picker>
 
-      <!-- Drive Detection -->
-      <div class="section-title">Drive Detection</div>
-      <p class="hint">Auto-detect drives by entity prefix/suffix, or list them explicitly below.</p>
-      <div class="row">
-        <ha-textfield id="f-prefix" label="Entity Prefix" value="${c.drive_entity_prefix || ''}" placeholder="sensor.nas_drive_"></ha-textfield>
-        <ha-textfield id="f-suffix" label="Entity Suffix" value="${c.drive_entity_suffix || ''}" placeholder="_status"></ha-textfield>
-      </div>
-
-      <!-- Explicit Drives -->
-      <div class="section-title">Drives (Explicit)</div>
+      <!-- Drives -->
+      <div class="section-title">Drives</div>
       <div id="drives-list">
         ${drives.map((d, i) => `
           <div class="list-item">
@@ -696,15 +652,8 @@ class NasCardEditor extends HTMLElement {
 
       <!-- Network -->
       <div class="section-title">Network</div>
-      <p class="hint">Auto-detect network interfaces by prefix/suffix, or list them explicitly below.</p>
-      <div class="row">
-        <ha-textfield id="f-net-prefix" label="Entity Prefix" value="${c.network_entity_prefix || ''}" placeholder="sensor.nas_"></ha-textfield>
-        <ha-textfield id="f-net-suffix" label="Entity Suffix" value="${c.network_entity_suffix || ''}" placeholder="_link"></ha-textfield>
-      </div>
-      <ha-textfield id="f-net-live" label="Live States (comma-separated)" value="${netLiveStates}"></ha-textfield>
-
-      <!-- Explicit Interfaces -->
-      <div class="section-title">Interfaces (Explicit)</div>
+      <ha-textfield id="f-net-live" label="Link-Up States (comma-separated)" value="${netLiveStates}"></ha-textfield>
+      <div class="section-title">Interfaces</div>
       <div id="net-list">
         ${netIfaces.map((n, i) => `
           <div class="list-item">
@@ -725,12 +674,8 @@ class NasCardEditor extends HTMLElement {
     this._bindText('f-title', 'title');
     this._bindText('f-total', 'total_drives', 'number');
     this._bindText('f-live-states', 'live_states', 'array');
-    this._bindText('f-prefix', 'drive_entity_prefix');
-    this._bindText('f-suffix', 'drive_entity_suffix');
     this._bindText('f-temp-warn', 'temperature_warn', 'number');
     this._bindText('f-temp-high', 'temperature_high', 'number');
-    this._bindText('f-net-prefix', 'network_entity_prefix');
-    this._bindText('f-net-suffix', 'network_entity_suffix');
     this._bindText('f-net-live', 'network_live_states', 'array');
 
     // Entity pickers
@@ -1166,9 +1111,9 @@ class UpsCardEditor extends HTMLElement {
   setConfig(config) {
     const incoming = JSON.stringify(config);
     if (this._configStr === incoming) return;
-    this._configStr = incoming;
     this._config = config;
     this._render();
+    this._fire(config); // Ensures HA's Save button is enabled immediately
   }
 
   set hass(hass) {
