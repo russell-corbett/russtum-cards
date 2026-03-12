@@ -559,7 +559,6 @@ class NasCardEditor extends HTMLElement {
           background: var(--secondary-background-color);
           border-radius: 8px;
         }
-        .list-item ha-entity-picker,
         .list-item ha-textfield { flex: 1; margin-bottom: 0; }
 
         .remove-btn {
@@ -610,13 +609,15 @@ class NasCardEditor extends HTMLElement {
       </div>
       <ha-textfield id="f-live-states" label="Live States (comma-separated)" value="${liveStates}"></ha-textfield>
       <ha-entity-picker id="f-status-entity" label="NAS Status Entity (for icon color)" value="${c.status_entity || ''}" allow-custom-entity></ha-entity-picker>
+      <ha-textfield id="f-status-ok"   label="Status OK States (comma-separated)"      value="${(c.status_ok_states   || ['online','running','active','ok','on','healthy']).join(', ')}"></ha-textfield>
+      <ha-textfield id="f-status-warn" label="Status Warning States (comma-separated)" value="${(c.status_warn_states  || ['degraded','warning','degrading']).join(', ')}"></ha-textfield>
 
       <!-- Drives -->
       <div class="section-title">Drives</div>
       <div id="drives-list">
         ${drives.map((d, i) => `
           <div class="list-item">
-            <ha-entity-picker data-idx="${i}" data-list="drive-entity" value="${d.entity || ''}" allow-custom-entity label="Entity"></ha-entity-picker>
+            <ha-textfield data-idx="${i}" data-list="drive-entity" label="Entity ID" value="${d.entity || ''}"></ha-textfield>
             <ha-textfield data-idx="${i}" data-list="drive-name" label="Name" value="${d.name || ''}"></ha-textfield>
             <button class="remove-btn" data-idx="${i}" data-list="drive-remove" title="Remove">
               <ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon>
@@ -641,7 +642,7 @@ class NasCardEditor extends HTMLElement {
       <div id="net-list">
         ${netIfaces.map((n, i) => `
           <div class="list-item">
-            <ha-entity-picker data-idx="${i}" data-list="net-entity" value="${n.entity || ''}" allow-custom-entity label="Entity"></ha-entity-picker>
+            <ha-textfield data-idx="${i}" data-list="net-entity" label="Entity ID" value="${n.entity || ''}"></ha-textfield>
             <ha-textfield data-idx="${i}" data-list="net-name" label="Name" value="${n.name || ''}"></ha-textfield>
             <button class="remove-btn" data-idx="${i}" data-list="net-remove" title="Remove">
               <ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon>
@@ -658,6 +659,8 @@ class NasCardEditor extends HTMLElement {
     this._bindText('f-title', 'title');
     this._bindText('f-total', 'total_drives', 'number');
     this._bindText('f-live-states', 'live_states', 'array');
+    this._bindText('f-status-ok',   'status_ok_states',  'array');
+    this._bindText('f-status-warn', 'status_warn_states', 'array');
     this._bindText('f-temp-warn', 'temperature_warn', 'number');
     this._bindText('f-temp-high', 'temperature_high', 'number');
     this._bindText('f-net-live', 'network_live_states', 'array');
@@ -668,10 +671,9 @@ class NasCardEditor extends HTMLElement {
     this._bindEntityPicker('f-uptime-entity', 'uptime_entity');
 
     // Drives list
-    sr.querySelectorAll('[data-list="drive-entity"]').forEach(picker => {
-      picker.hass = this._hass;
-      picker.addEventListener('value-changed', ev => {
-        const i = Number(picker.dataset.idx);
+    sr.querySelectorAll('[data-list="drive-entity"]').forEach(field => {
+      field.addEventListener('value-changed', ev => {
+        const i = Number(field.dataset.idx);
         const drives = [...(this._config.drives || [])];
         drives[i] = { ...drives[i], entity: ev.detail.value };
         this._fire({ ...this._config, drives });
@@ -699,10 +701,9 @@ class NasCardEditor extends HTMLElement {
     });
 
     // Network interfaces list
-    sr.querySelectorAll('[data-list="net-entity"]').forEach(picker => {
-      picker.hass = this._hass;
-      picker.addEventListener('value-changed', ev => {
-        const i = Number(picker.dataset.idx);
+    sr.querySelectorAll('[data-list="net-entity"]').forEach(field => {
+      field.addEventListener('value-changed', ev => {
+        const i = Number(field.dataset.idx);
         const ifaces = [...(this._config.network_interfaces || [])];
         ifaces[i] = { ...ifaces[i], entity: ev.detail.value };
         this._fire({ ...this._config, network_interfaces: ifaces });
