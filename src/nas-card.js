@@ -473,22 +473,28 @@ class NasCardEditor extends HTMLElement {
 
   setConfig(config) {
     const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return; // Avoid re-render loops
-    this._config = config;
+    if (this._configStr === incoming) return;
+    this._configStr = incoming;
+    this._config = { ...config };
     this._render();
-    this._fire(config); // Ensures HA's Save button is enabled immediately
+    Promise.resolve().then(() => {
+      this.dispatchEvent(new CustomEvent('config-changed', {
+        detail: { config: this._config },
+        bubbles: true,
+        composed: true,
+      }));
+    });
   }
 
   set hass(hass) {
     this._hass = hass;
-    this.shadowRoot?.querySelectorAll('ha-entity-picker').forEach(p => { p.hass = hass; });
   }
 
   _fire(config) {
-    this._config = config;
+    this._config = { ...config };
     this._configStr = JSON.stringify(config);
     this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config },
+      detail: { config: this._config },
       bubbles: true,
       composed: true,
     }));
@@ -548,7 +554,7 @@ class NasCardEditor extends HTMLElement {
 
         .row { display: flex; gap: 8px; margin-bottom: 8px; }
 
-        ha-entity-picker, ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
+        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
 
         .list-item {
           display: flex;
@@ -608,7 +614,7 @@ class NasCardEditor extends HTMLElement {
         <ha-textfield id="f-total" label="Total Drives" type="number" min="1" value="${c.total_drives || ''}"></ha-textfield>
       </div>
       <ha-textfield id="f-live-states" label="Live States (comma-separated)" value="${liveStates}"></ha-textfield>
-      <ha-entity-picker id="f-status-entity" label="NAS Status Entity (for icon color)" value="${c.status_entity || ''}" allow-custom-entity></ha-entity-picker>
+      <ha-textfield id="f-status-entity" label="NAS Status Entity (for icon color)" value="${c.status_entity || ''}"></ha-textfield>
       <ha-textfield id="f-status-ok"   label="Status OK States (comma-separated)"      value="${(c.status_ok_states   || ['online','running','active','ok','on','healthy']).join(', ')}"></ha-textfield>
       <ha-textfield id="f-status-warn" label="Status Warning States (comma-separated)" value="${(c.status_warn_states  || ['degraded','warning','degrading']).join(', ')}"></ha-textfield>
 
@@ -628,12 +634,12 @@ class NasCardEditor extends HTMLElement {
 
       <!-- Temperature & Uptime -->
       <div class="section-title">Temperature &amp; Uptime</div>
-      <ha-entity-picker id="f-temp-entity" label="Temperature Entity" value="${c.temperature_entity || ''}" allow-custom-entity></ha-entity-picker>
+      <ha-textfield id="f-temp-entity" label="Temperature Entity" value="${c.temperature_entity || ''}"></ha-textfield>
       <div class="row">
         <ha-textfield id="f-temp-warn" label="Warn (°C)" type="number" value="${c.temperature_warn ?? 60}"></ha-textfield>
         <ha-textfield id="f-temp-high" label="High (°C)" type="number" value="${c.temperature_high ?? 75}"></ha-textfield>
       </div>
-      <ha-entity-picker id="f-uptime-entity" label="Uptime Entity" value="${c.uptime_entity || ''}" allow-custom-entity></ha-entity-picker>
+      <ha-textfield id="f-uptime-entity" label="Uptime Entity" value="${c.uptime_entity || ''}"></ha-textfield>
 
       <!-- Network -->
       <div class="section-title">Network</div>
@@ -665,10 +671,10 @@ class NasCardEditor extends HTMLElement {
     this._bindText('f-temp-high', 'temperature_high', 'number');
     this._bindText('f-net-live', 'network_live_states', 'array');
 
-    // Entity pickers
-    this._bindEntityPicker('f-status-entity', 'status_entity');
-    this._bindEntityPicker('f-temp-entity', 'temperature_entity');
-    this._bindEntityPicker('f-uptime-entity', 'uptime_entity');
+    // Entity text fields
+    this._bindText('f-status-entity', 'status_entity');
+    this._bindText('f-temp-entity', 'temperature_entity');
+    this._bindText('f-uptime-entity', 'uptime_entity');
 
     // Drives list
     sr.querySelectorAll('[data-list="drive-entity"]').forEach(field => {

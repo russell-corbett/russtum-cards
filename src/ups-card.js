@@ -91,9 +91,6 @@ class UpsCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error('Invalid configuration');
-    if (!config.status_entity && !config.battery_entity) {
-      throw new Error('UPS card: specify at least status_entity or battery_entity');
-    }
     this._config = config;
     this._render();
   }
@@ -362,21 +359,27 @@ class UpsCardEditor extends HTMLElement {
   setConfig(config) {
     const incoming = JSON.stringify(config);
     if (this._configStr === incoming) return;
-    this._config = config;
+    this._configStr = incoming;
+    this._config = { ...config };
     this._render();
-    this._fire(config); // Ensures HA's Save button is enabled immediately
+    Promise.resolve().then(() => {
+      this.dispatchEvent(new CustomEvent('config-changed', {
+        detail: { config: this._config },
+        bubbles: true,
+        composed: true,
+      }));
+    });
   }
 
   set hass(hass) {
     this._hass = hass;
-    this.shadowRoot?.querySelectorAll('ha-entity-picker').forEach(p => { p.hass = hass; });
   }
 
   _fire(config) {
-    this._config = config;
+    this._config = { ...config };
     this._configStr = JSON.stringify(config);
     this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config },
+      detail: { config: this._config },
       bubbles: true,
       composed: true,
     }));
@@ -391,15 +394,6 @@ class UpsCardEditor extends HTMLElement {
       } else {
         if (raw) config[key] = raw; else delete config[key];
       }
-      this._fire(config);
-    });
-  }
-
-  _bindEntityPicker(id, key) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const val = ev.detail.value;
-      const config = { ...this._config };
-      if (val) config[key] = val; else delete config[key];
       this._fire(config);
     });
   }
@@ -423,8 +417,7 @@ class UpsCardEditor extends HTMLElement {
         }
 
         .row { display: flex; gap: 8px; margin-bottom: 8px; }
-        ha-entity-picker { display: block; width: 100%; margin-bottom: 8px; }
-        ha-textfield { display: block; width: 100%; }
+        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
       </style>
 
       <!-- Basic -->
@@ -433,10 +426,10 @@ class UpsCardEditor extends HTMLElement {
 
       <!-- Entities -->
       <div class="section-title">Entities</div>
-      <ha-entity-picker id="f-status"   label="Status Entity (NUT status_data)"    value="${c.status_entity || ''}"   allow-custom-entity></ha-entity-picker>
-      <ha-entity-picker id="f-battery"  label="Battery Entity (%)"                 value="${c.battery_entity || ''}"  allow-custom-entity></ha-entity-picker>
-      <ha-entity-picker id="f-runtime"  label="Runtime Entity (seconds remaining)" value="${c.runtime_entity || ''}"  allow-custom-entity></ha-entity-picker>
-      <ha-entity-picker id="f-load"     label="Load Entity (%)"                    value="${c.load_entity || ''}";    allow-custom-entity></ha-entity-picker>
+      <ha-textfield id="f-status"   label="Status Entity (NUT status_data)"    value="${c.status_entity || ''}"></ha-textfield>
+      <ha-textfield id="f-battery"  label="Battery Entity (%)"                 value="${c.battery_entity || ''}"></ha-textfield>
+      <ha-textfield id="f-runtime"  label="Runtime Entity (seconds remaining)" value="${c.runtime_entity || ''}"></ha-textfield>
+      <ha-textfield id="f-load"     label="Load Entity (%)"                    value="${c.load_entity || ''}"></ha-textfield>
 
       <!-- Thresholds -->
       <div class="section-title">Thresholds</div>
@@ -446,16 +439,13 @@ class UpsCardEditor extends HTMLElement {
       </div>
     `;
 
-    if (this._hass) this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(p => { p.hass = this._hass; });
-
-    this._bindText('f-title', 'title');
-    this._bindText('f-bat-low', 'battery_low_threshold', 'number');
+    this._bindText('f-title',     'title');
+    this._bindText('f-status',    'status_entity');
+    this._bindText('f-battery',   'battery_entity');
+    this._bindText('f-runtime',   'runtime_entity');
+    this._bindText('f-load',      'load_entity');
+    this._bindText('f-bat-low',   'battery_low_threshold', 'number');
     this._bindText('f-load-warn', 'load_warn_threshold', 'number');
-
-    this._bindEntityPicker('f-status',  'status_entity');
-    this._bindEntityPicker('f-battery', 'battery_entity');
-    this._bindEntityPicker('f-runtime', 'runtime_entity');
-    this._bindEntityPicker('f-load',    'load_entity');
   }
 }
 
