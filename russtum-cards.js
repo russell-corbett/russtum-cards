@@ -956,6 +956,23 @@ class UpsCard extends HTMLElement {
         }
         .status-badge ha-icon { --mdc-icon-size: 14px; }
 
+        /* ── Header runtime (top-right) ── */
+        .header-runtime {
+          text-align: right;
+          flex-shrink: 0;
+        }
+        .runtime-label {
+          font-size: 0.68em;
+          color: var(--secondary-text-color);
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+        .runtime-val {
+          font-size: 1.1em;
+          font-weight: 700;
+          color: ${isOnBattery ? 'var(--warning-color, #ff9800)' : 'var(--primary-text-color)'};
+        }
+
         /* ── Metric rows ── */
         .metrics { display: flex; flex-direction: column; gap: 10px; }
 
@@ -1004,15 +1021,8 @@ class UpsCard extends HTMLElement {
         .metric-value.warn { color: var(--warning-color, #ff9800); }
         .metric-value.error { color: var(--error-color, #f44336); }
 
-        /* Runtime has no bar, just icon + value */
-        .runtime-value {
-          font-size: 0.9em;
-          font-weight: 600;
-          color: ${isOnBattery ? 'var(--warning-color, #ff9800)' : 'var(--primary-text-color)'};
-        }
         .metric-icon.battery { color: ${batteryLow ? 'var(--error-color, #f44336)' : isCharging ? 'var(--info-color, #2196f3)' : 'var(--success-color, #4caf50)'}; }
         .metric-icon.load    { color: ${loadWarn   ? 'var(--error-color, #f44336)' : 'var(--primary-color, #03a9f4)'}; }
-        .metric-icon.runtime { color: ${isOnBattery ? 'var(--warning-color, #ff9800)' : 'var(--secondary-text-color)'}; }
       </style>
 
       <ha-card>
@@ -1025,6 +1035,11 @@ class UpsCard extends HTMLElement {
               ${status.label}
             </div>
           </div>
+          ${config.runtime_entity ? `
+          <div class="header-runtime">
+            <div class="runtime-label">Runtime</div>
+            <div class="runtime-val">${formatRuntime(runtimeSec)}</div>
+          </div>` : ''}
         </div>
 
         <div class="metrics">
@@ -1060,15 +1075,6 @@ class UpsCard extends HTMLElement {
                   ${loadPct != null ? loadPct + '%' : '—'}
                 </span>
               </div>
-            </div>
-          </div>` : ''}
-
-          ${config.runtime_entity ? `
-          <div class="metric">
-            <ha-icon class="metric-icon runtime" icon="mdi:timer-outline"></ha-icon>
-            <div class="metric-body">
-              <div class="metric-label">Runtime remaining</div>
-              <span class="runtime-value">${formatRuntime(runtimeSec)}</span>
             </div>
           </div>` : ''}
 
