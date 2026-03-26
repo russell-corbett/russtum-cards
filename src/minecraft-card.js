@@ -449,19 +449,31 @@ class MinecraftCardEditor extends HTMLElement {
     }));
   }
 
+  _readVal(ev, el) {
+    if (ev.detail?.value !== undefined) return ev.detail.value;
+    const path = ev.composedPath?.() ?? [];
+    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
+    return inner?.value ?? el.value ?? '';
+  }
+
   _bind(id, key, type) {
     const el = this.shadowRoot.getElementById(id);
     if (!el) return;
-    el.addEventListener('input', () => {
-      const raw = (el.value ?? '').trim();
+    const commit = (raw) => {
+      raw = (raw ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);
+      } else if (type === 'array') {
+        const arr = raw.split(',').map(s => s.trim()).filter(Boolean);
+        if (arr.length) config[key] = arr; else delete config[key];
       } else {
         if (raw) config[key] = raw; else delete config[key];
       }
-      this._fire(config);
-    });
+      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
+    };
+    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
+    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
   }
 
   _render() {

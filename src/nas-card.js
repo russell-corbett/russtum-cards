@@ -505,11 +505,18 @@ class NasCardEditor extends HTMLElement {
     this._render();
   }
 
+  _readVal(ev, el) {
+    if (ev.detail?.value !== undefined) return ev.detail.value;
+    const path = ev.composedPath?.() ?? [];
+    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
+    return inner?.value ?? el.value ?? '';
+  }
+
   _bindText(id, key, type) {
     const el = this.shadowRoot.getElementById(id);
     if (!el) return;
-    el.addEventListener('input', () => {
-      const raw = (el.value ?? '').trim();
+    const commit = (raw) => {
+      raw = (raw ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);
@@ -519,8 +526,10 @@ class NasCardEditor extends HTMLElement {
       } else {
         if (raw) config[key] = raw; else delete config[key];
       }
-      this._fire(config);
-    });
+      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
+    };
+    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
+    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
   }
 
   _render() {
@@ -671,20 +680,26 @@ class NasCardEditor extends HTMLElement {
 
     // Drives list
     sr.querySelectorAll('[data-list="drive-entity"]').forEach(field => {
-      field.addEventListener('input', () => {
+      const handleDriveEntity = (ev) => {
+        const val = this._readVal(ev, field);
         const i = Number(field.dataset.idx);
         const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], entity: field.value };
+        drives[i] = { ...drives[i], entity: val };
         this._fire({ ...this._config, drives });
-      });
+      };
+      field.addEventListener('value-changed', handleDriveEntity);
+      field.addEventListener('input', handleDriveEntity);
     });
     sr.querySelectorAll('[data-list="drive-name"]').forEach(field => {
-      field.addEventListener('input', () => {
+      const handleDriveName = (ev) => {
+        const val = this._readVal(ev, field);
         const i = Number(field.dataset.idx);
         const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], name: field.value };
+        drives[i] = { ...drives[i], name: val };
         this._fire({ ...this._config, drives });
-      });
+      };
+      field.addEventListener('value-changed', handleDriveName);
+      field.addEventListener('input', handleDriveName);
     });
     sr.querySelectorAll('[data-list="drive-remove"]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -701,20 +716,26 @@ class NasCardEditor extends HTMLElement {
 
     // Network interfaces list
     sr.querySelectorAll('[data-list="net-entity"]').forEach(field => {
-      field.addEventListener('input', () => {
+      const handleNetEntity = (ev) => {
+        const val = this._readVal(ev, field);
         const i = Number(field.dataset.idx);
         const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], entity: field.value };
+        ifaces[i] = { ...ifaces[i], entity: val };
         this._fire({ ...this._config, network_interfaces: ifaces });
-      });
+      };
+      field.addEventListener('value-changed', handleNetEntity);
+      field.addEventListener('input', handleNetEntity);
     });
     sr.querySelectorAll('[data-list="net-name"]').forEach(field => {
-      field.addEventListener('input', () => {
+      const handleNetName = (ev) => {
+        const val = this._readVal(ev, field);
         const i = Number(field.dataset.idx);
         const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], name: field.value };
+        ifaces[i] = { ...ifaces[i], name: val };
         this._fire({ ...this._config, network_interfaces: ifaces });
-      });
+      };
+      field.addEventListener('value-changed', handleNetName);
+      field.addEventListener('input', handleNetName);
     });
     sr.querySelectorAll('[data-list="net-remove"]').forEach(btn => {
       btn.addEventListener('click', () => {
