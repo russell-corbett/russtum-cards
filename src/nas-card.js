@@ -506,8 +506,10 @@ class NasCardEditor extends HTMLElement {
   }
 
   _bindText(id, key, type) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const raw = (ev.detail?.value ?? '').trim();
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const raw = (el.value ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);
@@ -517,15 +519,6 @@ class NasCardEditor extends HTMLElement {
       } else {
         if (raw) config[key] = raw; else delete config[key];
       }
-      this._fire(config);
-    });
-  }
-
-  _bindEntityPicker(id, key) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const val = ev.detail.value;
-      const config = { ...this._config };
-      if (val) config[key] = val; else delete config[key];
       this._fire(config);
     });
   }
@@ -678,18 +671,18 @@ class NasCardEditor extends HTMLElement {
 
     // Drives list
     sr.querySelectorAll('[data-list="drive-entity"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], entity: ev.detail.value };
+        drives[i] = { ...drives[i], entity: field.value };
         this._fire({ ...this._config, drives });
       });
     });
     sr.querySelectorAll('[data-list="drive-name"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], name: ev.detail.value };
+        drives[i] = { ...drives[i], name: field.value };
         this._fire({ ...this._config, drives });
       });
     });
@@ -708,18 +701,18 @@ class NasCardEditor extends HTMLElement {
 
     // Network interfaces list
     sr.querySelectorAll('[data-list="net-entity"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], entity: ev.detail.value };
+        ifaces[i] = { ...ifaces[i], entity: field.value };
         this._fire({ ...this._config, network_interfaces: ifaces });
       });
     });
     sr.querySelectorAll('[data-list="net-name"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], name: ev.detail.value };
+        ifaces[i] = { ...ifaces[i], name: field.value };
         this._fire({ ...this._config, network_interfaces: ifaces });
       });
     });

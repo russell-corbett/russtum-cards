@@ -386,8 +386,10 @@ class UpsCardEditor extends HTMLElement {
   }
 
   _bindText(id, key, type) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const raw = (ev.detail?.value ?? '').trim();
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const raw = (el.value ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);

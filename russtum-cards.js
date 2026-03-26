@@ -507,8 +507,10 @@ class NasCardEditor extends HTMLElement {
   }
 
   _bindText(id, key, type) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const raw = (ev.detail?.value ?? '').trim();
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const raw = (el.value ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);
@@ -679,18 +681,18 @@ class NasCardEditor extends HTMLElement {
 
     // Drives list
     sr.querySelectorAll('[data-list="drive-entity"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], entity: ev.detail.value };
+        drives[i] = { ...drives[i], entity: field.value };
         this._fire({ ...this._config, drives });
       });
     });
     sr.querySelectorAll('[data-list="drive-name"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], name: ev.detail.value };
+        drives[i] = { ...drives[i], name: field.value };
         this._fire({ ...this._config, drives });
       });
     });
@@ -709,18 +711,18 @@ class NasCardEditor extends HTMLElement {
 
     // Network interfaces list
     sr.querySelectorAll('[data-list="net-entity"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], entity: ev.detail.value };
+        ifaces[i] = { ...ifaces[i], entity: field.value };
         this._fire({ ...this._config, network_interfaces: ifaces });
       });
     });
     sr.querySelectorAll('[data-list="net-name"]').forEach(field => {
-      field.addEventListener('value-changed', ev => {
+      field.addEventListener('input', () => {
         const i = Number(field.dataset.idx);
         const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], name: ev.detail.value };
+        ifaces[i] = { ...ifaces[i], name: field.value };
         this._fire({ ...this._config, network_interfaces: ifaces });
       });
     });
@@ -1128,8 +1130,10 @@ class UpsCardEditor extends HTMLElement {
   }
 
   _bindText(id, key, type) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const raw = (ev.detail?.value ?? '').trim();
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const raw = (el.value ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);
@@ -1694,8 +1698,10 @@ class MediaServerCardEditor extends HTMLElement {
   }
 
   _bind(id, key, type) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const raw = (ev.detail?.value ?? '').trim();
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const raw = (el.value ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);
@@ -1879,7 +1885,7 @@ class MinecraftCard extends HTMLElement {
     const online = isOnline(rawStatus, onlineStates);
     const players    = rawPlayers    != null && rawPlayers    !== 'unavailable' ? parseInt(rawPlayers, 10) : null;
     const maxPlayers = rawMaxPlayers != null && rawMaxPlayers !== 'unavailable' ? parseInt(rawMaxPlayers, 10) : null;
-    const latencyMs  = rawLatency    != null && rawLatency    !== 'unavailable' ? parseFloat(rawLatency) : null;
+    const latencyMs  = rawLatency    != null && rawLatency    !== 'unavailable' ? parseFloat(parseFloat(rawLatency).toFixed(2)) : null;
     const playerList = parsePlayerList(rawPlayerList);
 
     let statusLabel, statusColor, statusDot;
@@ -1912,21 +1918,20 @@ class MinecraftCard extends HTMLElement {
         ha-card { overflow: hidden; padding: 0; }
 
         .banner {
-          position: relative;
           background: var(--secondary-background-color);
-          padding: 16px 16px 0;
+          padding: 12px 14px 0;
           border-bottom: 2px solid ${online === true ? 'var(--success-color, #4caf50)' : online === false ? 'var(--error-color, #f44336)' : 'var(--divider-color)'};
         }
         .header-row {
           display: flex;
           align-items: center;
-          gap: 12px;
-          margin-bottom: 12px;
+          gap: 10px;
+          margin-bottom: 10px;
         }
         .mc-icon-wrap {
-          width: 48px;
-          height: 48px;
-          border-radius: 12px;
+          width: 38px;
+          height: 38px;
+          border-radius: 9px;
           background: ${online === true ? 'rgba(76,175,80,0.15)' : online === false ? 'rgba(244,67,54,0.12)' : 'rgba(158,158,158,0.12)'};
           display: flex;
           align-items: center;
@@ -1934,20 +1939,20 @@ class MinecraftCard extends HTMLElement {
           flex-shrink: 0;
           border: 1.5px solid ${statusColor};
         }
-        .mc-icon-wrap ha-icon { --mdc-icon-size: 28px; color: ${statusColor}; }
+        .mc-icon-wrap ha-icon { --mdc-icon-size: 22px; color: ${statusColor}; }
         .header-text { flex: 1; min-width: 0; }
         .server-name {
-          font-size: 1.1em;
+          font-size: 1em;
           font-weight: 700;
           color: var(--primary-text-color);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .status-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+        .status-row { display: flex; align-items: center; gap: 5px; margin-top: 2px; }
         .status-dot {
-          width: 8px;
-          height: 8px;
+          width: 7px;
+          height: 7px;
           border-radius: 50%;
           background: ${statusDot};
           ${online === true ? 'animation: pulse 2s infinite;' : ''}
@@ -1955,18 +1960,18 @@ class MinecraftCard extends HTMLElement {
         }
         @keyframes pulse {
           0%   { box-shadow: 0 0 0 0 rgba(76,175,80,0.6); }
-          70%  { box-shadow: 0 0 0 6px rgba(76,175,80,0); }
+          70%  { box-shadow: 0 0 0 5px rgba(76,175,80,0); }
           100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); }
         }
-        .status-label { font-size: 0.82em; font-weight: 500; color: ${statusColor}; }
-        .latency-badge { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; gap: 2px; }
-        .latency-icon { --mdc-icon-size: 20px; color: ${latColor}; }
-        .latency-val { font-size: 0.75em; font-weight: 700; color: ${latColor}; white-space: nowrap; }
+        .status-label { font-size: 0.78em; font-weight: 500; color: ${statusColor}; }
+        .latency-badge { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; gap: 1px; }
+        .latency-icon { --mdc-icon-size: 18px; color: ${latColor}; }
+        .latency-val { font-size: 0.72em; font-weight: 700; color: ${latColor}; white-space: nowrap; }
         .motd {
-          font-size: 0.78em;
+          font-size: 0.75em;
           color: var(--secondary-text-color);
           font-style: italic;
-          padding: 0 0 12px;
+          padding: 0 0 10px;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -1974,49 +1979,49 @@ class MinecraftCard extends HTMLElement {
 
         .stats {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
           gap: 1px;
           background: var(--divider-color, rgba(0,0,0,0.12));
         }
         .stat {
           background: var(--card-background-color, var(--lovelace-background));
-          padding: 12px 14px;
+          padding: 9px 12px;
           display: flex;
           flex-direction: column;
           align-items: flex-start;
-          gap: 4px;
+          gap: 3px;
         }
-        .stat-label { font-size: 0.68em; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
-        .stat-value { font-size: 1.1em; font-weight: 700; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-        .stat-icon { --mdc-icon-size: 16px; color: var(--secondary-text-color); margin-bottom: 2px; }
+        .stat-label { font-size: 0.65em; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+        .stat-value { font-size: 1em; font-weight: 700; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+        .stat-icon { --mdc-icon-size: 14px; color: var(--secondary-text-color); margin-bottom: 1px; }
         .stat-value.has-players { color: var(--success-color, #4caf50); }
         .stat-value.version { font-size: 0.85em; }
 
         .players-section {
-          padding: 10px 16px 14px;
+          padding: 8px 14px 12px;
           border-top: 1px solid var(--divider-color, rgba(0,0,0,0.12));
         }
-        .players-header { font-size: 0.68em; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-        .player-list { display: flex; flex-wrap: wrap; gap: 6px; }
+        .players-header { font-size: 0.65em; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+        .player-list { display: flex; flex-wrap: wrap; gap: 5px; }
         .player-chip {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 5px;
           background: var(--secondary-background-color);
-          border-radius: 20px;
-          padding: 4px 10px 4px 4px;
-          font-size: 0.82em;
+          border-radius: 16px;
+          padding: 3px 8px 3px 3px;
+          font-size: 0.78em;
           font-weight: 500;
           color: var(--primary-text-color);
         }
         .player-avatar {
-          width: 22px;
-          height: 22px;
+          width: 19px;
+          height: 19px;
           border-radius: 50%;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 0.72em;
+          font-size: 0.68em;
           font-weight: 700;
           color: #fff;
           flex-shrink: 0;
@@ -2132,8 +2137,10 @@ class MinecraftCardEditor extends HTMLElement {
   }
 
   _bind(id, key, type) {
-    this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
-      const raw = (ev.detail?.value ?? '').trim();
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const raw = (el.value ?? '').trim();
       const config = { ...this._config };
       if (type === 'number') {
         if (raw === '') delete config[key]; else config[key] = Number(raw);
