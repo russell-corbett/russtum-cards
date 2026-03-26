@@ -2987,7 +2987,7 @@ class DeviceMonitorCard extends HTMLElement {
     if (!this._config) return;
     const config   = this._config;
     const devices  = config.devices || [];
-    const okStates = (config.ok_states || ['ok','good','healthy','normal','OK']).map(s => s.toLowerCase());
+    const okStates = (config.ok_states || ['ok','good','healthy','normal','OK','on','true']).map(s => s.toLowerCase());
     const cpuWarn  = config.cpu_warn ?? 75;
     const ramWarn  = config.ram_warn ?? 90;
 
