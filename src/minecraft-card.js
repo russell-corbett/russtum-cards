@@ -24,12 +24,16 @@ function isOnline(state, onlineStates) {
 
 function parsePlayerList(raw) {
   if (!raw || raw === 'unavailable' || raw === 'unknown') return [];
+  let list = [];
   try {
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed.filter(Boolean);
-  } catch (_) {}
-  // comma-separated fallback
-  return raw.split(',').map(s => s.trim()).filter(Boolean);
+    if (Array.isArray(parsed)) list = parsed.filter(Boolean);
+    else list = raw.split(',').map(s => s.trim()).filter(Boolean);
+  } catch (_) {
+    list = raw.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  // MC usernames have no spaces — entries with spaces are empty-state messages
+  return list.filter(name => name && !name.includes(' '));
 }
 
 function latencyColor(ms) {
@@ -143,67 +147,68 @@ class MinecraftCard extends HTMLElement {
     const latColor = latencyColor(latencyMs);
     const latIcon  = latencyIcon(latencyMs);
 
-    // Player count display
     const playerCountStr = players != null
       ? (maxPlayers != null ? `${players} / ${maxPlayers}` : `${players}`)
       : '—';
 
-    // Player list pills (only if online and list is non-empty)
-    const showPlayerList = online && playerList.length > 0;
+    const hasPlayers = online === true && playerList.length > 0;
+    const showPlayerSection = online === true && config.player_list_entity;
+    const hasInfo = config.players_entity || config.version_entity;
+    const motd = rawMotd && rawMotd !== 'unavailable' && rawMotd !== 'unknown' ? rawMotd : null;
 
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
+        ha-card { overflow: hidden; padding: 0; }
 
-        ha-card {
-          overflow: hidden;
-          padding: 0;
-        }
-
-        /* ── Banner / Header ── */
+        /* ── Banner ── */
         .banner {
           background: var(--secondary-background-color);
-          padding: 12px 14px 0;
+          padding: 14px 16px 12px;
           border-bottom: 2px solid ${online === true ? 'var(--success-color, #4caf50)' : online === false ? 'var(--error-color, #f44336)' : 'var(--divider-color)'};
         }
-
         .header-row {
           display: flex;
           align-items: center;
-          gap: 10px;
-          margin-bottom: 10px;
+          gap: 12px;
         }
-
         .mc-icon-wrap {
-          width: 38px;
-          height: 38px;
-          border-radius: 9px;
-          background: ${online === true ? 'rgba(76,175,80,0.15)' : online === false ? 'rgba(244,67,54,0.12)' : 'rgba(158,158,158,0.12)'};
+          width: 42px;
+          height: 42px;
+          border-radius: 10px;
+          background: ${online === true ? 'rgba(76,175,80,0.12)' : online === false ? 'rgba(244,67,54,0.10)' : 'rgba(158,158,158,0.10)'};
           display: flex;
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
           border: 1.5px solid ${statusColor};
         }
-        .mc-icon-wrap ha-icon {
-          --mdc-icon-size: 22px;
-          color: ${statusColor};
-        }
+        .mc-icon-wrap ha-icon { --mdc-icon-size: 24px; color: ${statusColor}; }
 
         .header-text { flex: 1; min-width: 0; }
         .server-name {
-          font-size: 1em;
+          font-size: 1.05em;
           font-weight: 700;
           color: var(--primary-text-color);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+          line-height: 1.2;
         }
-        .status-row {
+        .meta-row {
           display: flex;
           align-items: center;
+          gap: 8px;
+          margin-top: 3px;
+          flex-wrap: wrap;
+        }
+        .status-pill {
+          display: inline-flex;
+          align-items: center;
           gap: 5px;
-          margin-top: 2px;
+          font-size: 0.75em;
+          font-weight: 600;
+          color: ${statusColor};
         }
         .status-dot {
           width: 7px;
@@ -214,188 +219,170 @@ class MinecraftCard extends HTMLElement {
           flex-shrink: 0;
         }
         @keyframes pulse {
-          0%   { box-shadow: 0 0 0 0 rgba(76,175,80,0.6); }
+          0%   { box-shadow: 0 0 0 0 rgba(76,175,80,0.55); }
           70%  { box-shadow: 0 0 0 5px rgba(76,175,80,0); }
           100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); }
         }
-        .status-label {
-          font-size: 0.78em;
-          font-weight: 500;
-          color: ${statusColor};
+        .motd-inline {
+          font-size: 0.73em;
+          color: var(--secondary-text-color);
+          font-style: italic;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          flex: 1;
+          min-width: 0;
         }
 
-        /* Latency badge top-right */
+        /* Latency top-right */
         .latency-badge {
           display: flex;
-          flex-direction: column;
-          align-items: flex-end;
+          align-items: center;
+          gap: 4px;
           flex-shrink: 0;
-          gap: 1px;
         }
-        .latency-icon {
-          --mdc-icon-size: 18px;
-          color: ${latColor};
-        }
+        .latency-icon { --mdc-icon-size: 18px; color: ${latColor}; }
         .latency-val {
-          font-size: 0.72em;
+          font-size: 0.78em;
           font-weight: 700;
           color: ${latColor};
           white-space: nowrap;
         }
 
-        /* MOTD strip */
-        .motd {
-          font-size: 0.75em;
-          color: var(--secondary-text-color);
-          font-style: italic;
-          padding: 0 0 10px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        /* ── Stats grid ── */
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-          gap: 1px;
-          background: var(--divider-color, rgba(0,0,0,0.12));
-        }
-
-        .stat {
-          background: var(--card-background-color, var(--lovelace-background));
-          padding: 9px 12px;
+        /* ── Info strip ── */
+        .info-strip {
           display: flex;
-          flex-direction: column;
-          align-items: flex-start;
-          gap: 3px;
+          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
         }
-        .stat-label {
-          font-size: 0.65em;
+        .info-item {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 10px 14px;
+        }
+        .info-item + .info-item {
+          border-left: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        }
+        .info-icon { --mdc-icon-size: 22px; color: var(--secondary-text-color); flex-shrink: 0; }
+        .info-body { min-width: 0; }
+        .info-label {
+          font-size: 0.62em;
           color: var(--secondary-text-color);
           text-transform: uppercase;
-          letter-spacing: 0.05em;
-          white-space: nowrap;
+          letter-spacing: 0.06em;
         }
-        .stat-value {
-          font-size: 1em;
+        .info-value {
+          font-size: 0.95em;
           font-weight: 700;
           color: var(--primary-text-color);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          max-width: 100%;
         }
-        .stat-icon {
-          --mdc-icon-size: 14px;
-          color: var(--secondary-text-color);
-          margin-bottom: 1px;
-        }
+        .info-value.active { color: var(--success-color, #4caf50); }
 
-        .stat-value.has-players { color: var(--success-color, #4caf50); }
-        .stat-value.version { font-size: 0.85em; }
-
-        /* ── Player list ── */
+        /* ── Player section ── */
         .players-section {
-          padding: 8px 14px 12px;
-          border-top: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+          padding: 10px 14px 13px;
         }
         .players-header {
-          font-size: 0.65em;
+          font-size: 0.62em;
           color: var(--secondary-text-color);
           text-transform: uppercase;
-          letter-spacing: 0.05em;
-          margin-bottom: 6px;
+          letter-spacing: 0.06em;
+          margin-bottom: 7px;
         }
-        .player-list {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 5px;
-        }
+        .player-list { display: flex; flex-wrap: wrap; gap: 6px; }
         .player-chip {
           display: flex;
           align-items: center;
-          gap: 5px;
+          gap: 6px;
           background: var(--secondary-background-color);
-          border-radius: 16px;
-          padding: 3px 8px 3px 3px;
-          font-size: 0.78em;
+          border-radius: 18px;
+          padding: 4px 10px 4px 4px;
+          font-size: 0.8em;
           font-weight: 500;
           color: var(--primary-text-color);
         }
         .player-avatar {
-          width: 19px;
-          height: 19px;
+          width: 22px;
+          height: 22px;
           border-radius: 50%;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 0.68em;
+          font-size: 0.7em;
           font-weight: 700;
           color: #fff;
           flex-shrink: 0;
         }
+        .empty-players {
+          font-size: 0.8em;
+          color: var(--disabled-text-color, #9e9e9e);
+          font-style: italic;
+        }
       </style>
 
       <ha-card>
-        <!-- Banner / Header -->
+        <!-- Banner -->
         <div class="banner">
           <div class="header-row">
             <div class="mc-icon-wrap">
               <ha-icon icon="${icon}"></ha-icon>
             </div>
-
             <div class="header-text">
               <div class="server-name">${title}</div>
-              <div class="status-row">
-                <div class="status-dot"></div>
-                <span class="status-label">${statusLabel}</span>
+              <div class="meta-row">
+                <div class="status-pill">
+                  <div class="status-dot"></div>
+                  ${statusLabel}
+                </div>
+                ${motd ? `<span class="motd-inline">${motd}</span>` : ''}
               </div>
             </div>
-
             ${config.latency_entity ? `
             <div class="latency-badge">
               <ha-icon class="latency-icon" icon="${latIcon}"></ha-icon>
               <span class="latency-val">${latencyMs != null ? latencyMs + ' ms' : '—'}</span>
             </div>` : ''}
           </div>
-
-          ${rawMotd && rawMotd !== 'unavailable' && rawMotd !== 'unknown' ? `
-          <div class="motd">${rawMotd}</div>` : ''}
         </div>
 
-        <!-- Stats tiles -->
-        <div class="stats">
-
+        <!-- Info strip -->
+        ${hasInfo ? `
+        <div class="info-strip">
           ${config.players_entity ? `
-          <div class="stat">
-            <ha-icon class="stat-icon" icon="mdi:account-group"></ha-icon>
-            <div class="stat-label">Players</div>
-            <div class="stat-value ${players != null && players > 0 ? 'online' : ''}">${playerCountStr}</div>
+          <div class="info-item">
+            <ha-icon class="info-icon" icon="mdi:account-group"></ha-icon>
+            <div class="info-body">
+              <div class="info-label">Players</div>
+              <div class="info-value ${players != null && players > 0 ? 'active' : ''}">${playerCountStr}</div>
+            </div>
           </div>` : ''}
-
           ${config.version_entity ? `
-          <div class="stat">
-            <ha-icon class="stat-icon" icon="mdi:tag"></ha-icon>
-            <div class="stat-label">Version</div>
-            <div class="stat-value" style="font-size:0.85em;">${rawVersion && rawVersion !== 'unavailable' ? rawVersion : '—'}</div>
+          <div class="info-item">
+            <ha-icon class="info-icon" icon="mdi:tag-outline"></ha-icon>
+            <div class="info-body">
+              <div class="info-label">Version</div>
+              <div class="info-value" style="font-size:0.82em;">${rawVersion && rawVersion !== 'unavailable' ? rawVersion : '—'}</div>
+            </div>
           </div>` : ''}
-
-          ${!config.latency_entity ? '' : ''}
-
-        </div>
+        </div>` : ''}
 
         <!-- Player list -->
-        ${showPlayerList ? `
+        ${showPlayerSection ? `
         <div class="players-section">
           <div class="players-header">Online Now</div>
+          ${hasPlayers ? `
           <div class="player-list">
             ${playerList.map(name => `
             <div class="player-chip">
               <div class="player-avatar" style="background:${avatarColor(name)};">${name.charAt(0).toUpperCase()}</div>
               ${name}
             </div>`).join('')}
-          </div>
+          </div>` : `
+          <div class="empty-players">No players currently online</div>`}
         </div>` : ''}
       </ha-card>
     `;
