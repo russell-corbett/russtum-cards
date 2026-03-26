@@ -28,6 +28,13 @@
  *   qbit_upload_total_entity: sensor.qbittorrent_all_time_upload
  */
 
+// Convert a value+unit to bytes for comparison
+function toBytes(n, unit) {
+  const u = (unit || 'GB').trim();
+  const map = { B: 1, KB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12, KiB: 1024, MiB: 1048576, GiB: 1073741824, TiB: 1099511627776 };
+  return n * (map[u] || 1e9);
+}
+
 function formatMediaBytes(val, unit) {
   if (val == null || isNaN(val)) return '—';
   const n = Number(val);
@@ -135,20 +142,37 @@ class MediaServerCard extends HTMLElement {
 
     // Disk
     const diskFree    = this._numVal(config.disk_free_entity);
-    const diskTotal   = this._numVal(config.disk_total_entity);
     const diskUsedPct = this._numVal(config.disk_used_pct_entity);
-    const showDisk    = config.disk_free_entity || config.disk_total_entity || config.disk_used_pct_entity;
+
+    // Static total takes priority over entity
+    const staticTotal     = config.disk_total != null ? Number(config.disk_total) : null;
+    const staticTotalUnit = config.disk_total_unit || 'TB';
+    const diskTotalEntity = this._numVal(config.disk_total_entity);
+
+    // Resolve total as bytes for bar calculation
+    const totalBytes = staticTotal != null
+      ? toBytes(staticTotal, staticTotalUnit)
+      : (diskTotalEntity != null ? toBytes(diskTotalEntity, this._unit(config.disk_total_entity)) : null);
+
+    const freeBytes = diskFree != null
+      ? toBytes(diskFree, this._unit(config.disk_free_entity))
+      : null;
+
+    const showDisk = config.disk_free_entity || config.disk_total_entity || config.disk_used_pct_entity || staticTotal != null;
 
     let barUsedPct = diskUsedPct;
-    if (barUsedPct == null && diskFree != null && diskTotal != null && diskTotal > 0) {
-      barUsedPct = ((diskTotal - diskFree) / diskTotal) * 100;
+    if (barUsedPct == null && freeBytes != null && totalBytes != null && totalBytes > 0) {
+      barUsedPct = ((totalBytes - freeBytes) / totalBytes) * 100;
     }
     const diskBarColor = barUsedPct == null ? 'var(--primary-color, #03a9f4)'
       : barUsedPct >= 90 ? 'var(--error-color, #f44336)'
       : barUsedPct >= 75 ? 'var(--warning-color, #ff9800)'
       : 'var(--primary-color, #03a9f4)';
-    const diskFreeStr  = diskFree  != null ? this._fmt(config.disk_free_entity)  : null;
-    const diskTotalStr = diskTotal != null ? this._fmt(config.disk_total_entity) : null;
+    const diskFreeStr  = diskFree != null ? this._fmt(config.disk_free_entity) : null;
+    // Format the total — prefer static config, then entity
+    const diskTotalStr = staticTotal != null
+      ? formatMediaBytes(staticTotal, staticTotalUnit)
+      : (diskTotalEntity != null ? this._fmt(config.disk_total_entity) : null);
 
     // Jellyfin
     const jellyClients = this._numVal(config.jellyfin_clients_entity);
@@ -475,11 +499,15 @@ class MediaServerCardEditor extends HTMLElement {
     }));
   }
 
-  _bind(id, key) {
+  _bind(id, key, type) {
     this.shadowRoot.getElementById(id)?.addEventListener('value-changed', ev => {
       const raw = (ev.detail?.value ?? '').trim();
       const config = { ...this._config };
-      if (raw) config[key] = raw; else delete config[key];
+      if (type === 'number') {
+        if (raw === '') delete config[key]; else config[key] = Number(raw);
+      } else {
+        if (raw) config[key] = raw; else delete config[key];
+      }
       this._fire(config);
     });
   }
@@ -518,9 +546,12 @@ class MediaServerCardEditor extends HTMLElement {
       <ha-textfield id="f-sonarr-queue"  label="Queue Count Entity" value="${f('sonarr_queue_entity')}"></ha-textfield>
 
       <div class="section-title">Storage</div>
-      <ha-textfield id="f-disk-free"  label="Free Space Entity"                      value="${f('disk_free_entity')}"></ha-textfield>
-      <ha-textfield id="f-disk-total" label="Total Space Entity"                     value="${f('disk_total_entity')}"></ha-textfield>
-      <ha-textfield id="f-disk-pct"   label="Used % Entity (alternative to above)"   value="${f('disk_used_pct_entity')}"></ha-textfield>
+      <ha-textfield id="f-disk-free"  label="Free Space Entity"                    value="${f('disk_free_entity')}"></ha-textfield>
+      <div class="row">
+        <ha-textfield id="f-disk-total-val"  label="Total Disk Size (number)" type="number" min="0" style="flex:2;" value="${c.disk_total != null ? c.disk_total : ''}"></ha-textfield>
+        <ha-textfield id="f-disk-total-unit" label="Unit"                                          style="flex:1;" value="${f('disk_total_unit') || 'TB'}"></ha-textfield>
+      </div>
+      <ha-textfield id="f-disk-pct"   label="Used % Entity (alternative to above)" value="${f('disk_used_pct_entity')}"></ha-textfield>
 
       <div class="section-title">Jellyfin</div>
       <ha-textfield id="f-jelly" label="Active Clients Entity" value="${f('jellyfin_clients_entity')}"></ha-textfield>
@@ -536,19 +567,20 @@ class MediaServerCardEditor extends HTMLElement {
       </div>
     `;
 
-    this._bind('f-title',         'title');
-    this._bind('f-radarr-movies', 'radarr_movies_entity');
-    this._bind('f-radarr-queue',  'radarr_queue_entity');
-    this._bind('f-sonarr-series', 'sonarr_series_entity');
-    this._bind('f-sonarr-queue',  'sonarr_queue_entity');
-    this._bind('f-disk-free',     'disk_free_entity');
-    this._bind('f-disk-total',    'disk_total_entity');
-    this._bind('f-disk-pct',      'disk_used_pct_entity');
-    this._bind('f-jelly',         'jellyfin_clients_entity');
-    this._bind('f-dl-speed',      'qbit_download_speed_entity');
-    this._bind('f-ul-speed',      'qbit_upload_speed_entity');
-    this._bind('f-dl-total',      'qbit_download_total_entity');
-    this._bind('f-ul-total',      'qbit_upload_total_entity');
+    this._bind('f-title',          'title');
+    this._bind('f-radarr-movies',  'radarr_movies_entity');
+    this._bind('f-radarr-queue',   'radarr_queue_entity');
+    this._bind('f-sonarr-series',  'sonarr_series_entity');
+    this._bind('f-sonarr-queue',   'sonarr_queue_entity');
+    this._bind('f-disk-free',      'disk_free_entity');
+    this._bind('f-disk-total-val', 'disk_total', 'number');
+    this._bind('f-disk-total-unit','disk_total_unit');
+    this._bind('f-disk-pct',       'disk_used_pct_entity');
+    this._bind('f-jelly',          'jellyfin_clients_entity');
+    this._bind('f-dl-speed',       'qbit_download_speed_entity');
+    this._bind('f-ul-speed',       'qbit_upload_speed_entity');
+    this._bind('f-dl-total',       'qbit_download_total_entity');
+    this._bind('f-ul-total',       'qbit_upload_total_entity');
   }
 }
 
