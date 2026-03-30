@@ -57,14 +57,14 @@ class SonarrUpcomingCard extends HTMLElement {
   set hass(hass) {
     const firstSet = !this._hass;
     this._hass = hass;
-    if (firstSet && this._config) {
+    if (firstSet && this._config?.entry_id) {
       this._fetchUpcoming();
       this._startTimer();
     }
   }
 
   async _fetchUpcoming() {
-    if (!this._hass || !this._config) return;
+    if (!this._hass || !this._config?.entry_id) return;
 
     this._loading = true;
     this._render();
@@ -79,7 +79,10 @@ class SonarrUpcomingCard extends HTMLElement {
         type:           'call_service',
         domain:         'sonarr',
         service:        'get_upcoming',
-        service_data:   { start_date: start, end_date: end },
+        service_data:   {
+          entry_id: this._config.entry_id,
+          days:     this._config.days ?? 7,
+        },
         return_response: true,
       };
 
@@ -196,7 +199,9 @@ class SonarrUpcomingCard extends HTMLElement {
     const groups = this._episodes ? this._groupByDate(this._episodes) : [];
 
     let bodyHtml;
-    if (this._loading && !this._hasFetched) {
+    if (!this._config.entry_id) {
+      bodyHtml = `<div class="info-msg">Set <code>entry_id</code> in the card config.</div>`;
+    } else if (this._loading && !this._hasFetched) {
       bodyHtml = `<div class="info-msg loading"><span class="spin">↻</span> Loading…</div>`;
     } else if (this._error) {
       bodyHtml = `<div class="info-msg error">⚠ ${this._error}</div>`;
@@ -404,6 +409,7 @@ class SonarrUpcomingCard extends HTMLElement {
   static getStubConfig() {
     return {
       title: 'Upcoming Episodes',
+      entry_id: '',
       days: 7,
     };
   }
@@ -486,7 +492,8 @@ class SonarrUpcomingCardEditor extends HTMLElement {
 
       <div class="section">Basic</div>
       <ha-textfield id="f-title" label="Card Title" value="${f('title')}"></ha-textfield>
-
+      <ha-textfield id="f-entry" label="Sonarr Entry ID" value="${f('entry_id')}"></ha-textfield>
+      <div class="hint">From your action config: <code>entry_id: 01KBC...</code></div>
 
       <div class="section">Options</div>
       <div class="row2">
@@ -496,6 +503,7 @@ class SonarrUpcomingCardEditor extends HTMLElement {
     `;
 
     this._bindText('f-title',   'title');
+    this._bindText('f-entry',   'entry_id');
     this._bindText('f-days',    'days',            'number');
     this._bindText('f-refresh', 'refresh_minutes', 'number');
   }
