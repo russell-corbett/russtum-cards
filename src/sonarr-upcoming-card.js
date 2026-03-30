@@ -51,24 +51,20 @@ class SonarrUpcomingCard extends HTMLElement {
 
   setConfig(config) {
     this._config = config;
-    if (!config.config_entry_id) {
-      this._episodes = null;
-      this._error    = null;
-    }
     this._render();
   }
 
   set hass(hass) {
     const firstSet = !this._hass;
     this._hass = hass;
-    if (firstSet && this._config?.config_entry_id) {
+    if (firstSet && this._config) {
       this._fetchUpcoming();
       this._startTimer();
     }
   }
 
   async _fetchUpcoming() {
-    if (!this._hass || !this._config?.config_entry_id) return;
+    if (!this._hass || !this._config) return;
 
     this._loading = true;
     this._render();
@@ -84,7 +80,6 @@ class SonarrUpcomingCard extends HTMLElement {
         domain:         'sonarr',
         service:        'get_upcoming',
         service_data:   { start_date: start, end_date: end },
-        target:         { config_entry_id: this._config.config_entry_id },
         return_response: true,
       };
 
@@ -201,9 +196,7 @@ class SonarrUpcomingCard extends HTMLElement {
     const groups = this._episodes ? this._groupByDate(this._episodes) : [];
 
     let bodyHtml;
-    if (!this._config.config_entry_id) {
-      bodyHtml = `<div class="info-msg">Configure <code>config_entry_id</code> in the card YAML.</div>`;
-    } else if (this._loading && !this._hasFetched) {
+    if (this._loading && !this._hasFetched) {
       bodyHtml = `<div class="info-msg loading"><span class="spin">↻</span> Loading…</div>`;
     } else if (this._error) {
       bodyHtml = `<div class="info-msg error">⚠ ${this._error}</div>`;
@@ -411,7 +404,6 @@ class SonarrUpcomingCard extends HTMLElement {
   static getStubConfig() {
     return {
       title: 'Upcoming Episodes',
-      config_entry_id: '',
       days: 7,
     };
   }
@@ -495,9 +487,6 @@ class SonarrUpcomingCardEditor extends HTMLElement {
       <div class="section">Basic</div>
       <ha-textfield id="f-title" label="Card Title" value="${f('title')}"></ha-textfield>
 
-      <div class="section">Sonarr Connection</div>
-      <ha-textfield id="f-entry" label="Config Entry ID" value="${f('config_entry_id')}"></ha-textfield>
-      <div class="hint">Found in Settings → Devices &amp; Services → Sonarr → ⋮ → Copy entry ID</div>
 
       <div class="section">Options</div>
       <div class="row2">
@@ -507,7 +496,6 @@ class SonarrUpcomingCardEditor extends HTMLElement {
     `;
 
     this._bindText('f-title',   'title');
-    this._bindText('f-entry',   'config_entry_id');
     this._bindText('f-days',    'days',            'number');
     this._bindText('f-refresh', 'refresh_minutes', 'number');
   }
