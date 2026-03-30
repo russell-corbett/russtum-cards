@@ -164,6 +164,9 @@ class SonarrUpcomingCard extends HTMLElement {
     const finaleMap = { season: 'Season Finale', series: 'Series Finale', mid_season: 'Mid-Season Finale' };
     const finale    = finaleMap[ep.finale_type] ?? null;
     const netStyle  = this._networkStyle(ep.network);
+    const airTime   = ep.air_date_utc
+      ? new Date(ep.air_date_utc).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+      : null;
 
     return `
     <div class="ep-row">
@@ -179,6 +182,7 @@ class SonarrUpcomingCard extends HTMLElement {
           <span class="ep-id">${ep.episode_identifier || ''}</span>
           ${ep.title ? `<span class="sep">·</span><span class="ep-title">${ep.title}</span>` : ''}
           ${ep.runtime ? `<span class="runtime">${ep.runtime}m</span>` : ''}
+          ${airTime ? `<span class="sep">·</span><span class="airtime">${airTime}</span>` : ''}
         </div>
         <div class="badges">
           ${ep.network   ? `<span class="badge network" ${netStyle ? `style="${netStyle}"` : ''}>${ep.network}</span>` : ''}
@@ -319,6 +323,7 @@ class SonarrUpcomingCard extends HTMLElement {
           text-overflow: ellipsis;
         }
         .runtime { flex-shrink: 0; color: var(--disabled-text-color, #9e9e9e); padding-left: 4px; }
+        .airtime { flex-shrink: 0; color: var(--disabled-text-color, #9e9e9e); }
 
         /* Badges */
         .badges { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
