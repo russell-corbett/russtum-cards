@@ -73,7 +73,7 @@ function dqProtocol(proto) {
 function dqParseResponse(response) {
   if (!response) return [];
   // Try known top-level keys (object of objects)
-  for (const key of ['movies', 'queue', 'episodes', 'records']) {
+  for (const key of ['movies', 'shows', 'queue', 'episodes', 'records']) {
     if (response[key] && typeof response[key] === 'object') {
       const val = response[key];
       // Could be an array or an object keyed by download title

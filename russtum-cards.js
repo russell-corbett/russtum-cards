@@ -3590,7 +3590,7 @@ function dqProtocol(proto) {
 
 function dqParseResponse(response) {
   if (!response) return [];
-  for (const key of ['movies', 'queue', 'episodes', 'records']) {
+  for (const key of ['movies', 'shows', 'queue', 'episodes', 'records']) {
     if (response[key] && typeof response[key] === 'object') {
       const val = response[key];
       return Array.isArray(val) ? val : Object.values(val);
