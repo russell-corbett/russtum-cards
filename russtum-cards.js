@@ -2225,7 +2225,6 @@ class MinecraftCardEditor extends HTMLElement {
 
 customElements.define('minecraft-card-editor', MinecraftCardEditor);
 
-// ── Docker Card ────────────────────────────────────────────────────────────────
 /**
  * Docker Card for Home Assistant
  *
@@ -2234,7 +2233,8 @@ customElements.define('minecraft-card-editor', MinecraftCardEditor);
  *   title: My Server
  *   device_name: Raspberry Pi                   # optional, shown across from title
  *   cpu_name: Intel i5-9500                     # optional, static text shown below
- *   ram: 32 GB                                  # optional, static text shown below
+ *   ram: 32 GB                                  # optional, static text shown below (same line as cpu_name)
+ *   gpu: RTX 3060                               # optional, static text shown below cpu/ram
  *   icon: mdi:docker                             # optional, default mdi:docker
  *   host_entity: binary_sensor.docker_status    # optional overall host status
  *   containers_running_entity: sensor.docker_containers_running
@@ -2366,6 +2366,7 @@ class DockerCard extends HTMLElement {
     const deviceName = config.device_name || '';
     const cpuName    = config.cpu_name    || '';
     const ramText    = config.ram         || '';
+    const gpuText    = config.gpu         || '';
     const cpuWarn = config.cpu_warn ?? 70;
 
     const hostOnline = this._hostStatus();
@@ -2539,6 +2540,13 @@ class DockerCard extends HTMLElement {
           gap: 8px;
           flex-wrap: wrap;
         }
+        .hw-stack {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 2px;
+          flex-shrink: 0;
+        }
         .hw-info {
           display: flex;
           align-items: center;
@@ -2546,7 +2554,6 @@ class DockerCard extends HTMLElement {
           font-size: 0.75em;
           color: var(--secondary-text-color);
           white-space: nowrap;
-          flex-shrink: 0;
         }
         .hw-sep { opacity: 0.5; }
         .status-pill {
@@ -2676,11 +2683,18 @@ class DockerCard extends HTMLElement {
                     ${statusLabel}
                   </div>
                 </div>
-                ${(cpuName || ramText) ? `
-                <div class="hw-info">
-                  ${cpuName ? `<span>${cpuName}</span>` : ''}
-                  ${cpuName && ramText ? `<span class="hw-sep">·</span>` : ''}
-                  ${ramText ? `<span>${ramText}</span>` : ''}
+                ${(cpuName || ramText || gpuText) ? `
+                <div class="hw-stack">
+                  ${(cpuName || ramText) ? `
+                  <div class="hw-info">
+                    ${cpuName ? `<span>${cpuName}</span>` : ''}
+                    ${cpuName && ramText ? `<span class="hw-sep">·</span>` : ''}
+                    ${ramText ? `<span>${ramText}</span>` : ''}
+                  </div>` : ''}
+                  ${gpuText ? `
+                  <div class="hw-info">
+                    <span>${gpuText}</span>
+                  </div>` : ''}
                 </div>` : ''}
               </div>
             </div>
@@ -2887,6 +2901,7 @@ class DockerCardEditor extends HTMLElement {
         <ha-textfield id="f-cpu-name" label="CPU Name"           value="${c.cpu_name || ''}"></ha-textfield>
         <ha-textfield id="f-ram"      label="RAM"                value="${c.ram || ''}"></ha-textfield>
       </div>
+      <ha-textfield id="f-gpu" label="GPU"                       value="${c.gpu || ''}"></ha-textfield>
       <ha-textfield id="f-icon"  label="Icon (mdi:...)" value="${c.icon || 'mdi:docker'}"></ha-textfield>
       <ha-textfield id="f-host-entity"       label="Host Status Entity (optional)"        value="${c.host_entity || ''}"></ha-textfield>
       <ha-textfield id="f-containers-running" label="Containers Running Entity"            value="${c.containers_running_entity || ''}"></ha-textfield>
@@ -2929,6 +2944,7 @@ class DockerCardEditor extends HTMLElement {
     this._bindText('f-device-name',        'device_name');
     this._bindText('f-cpu-name',           'cpu_name');
     this._bindText('f-ram',                'ram');
+    this._bindText('f-gpu',                'gpu');
     this._bindText('f-icon',               'icon');
     this._bindText('f-host-entity',        'host_entity');
     this._bindText('f-containers-running', 'containers_running_entity');
@@ -2972,7 +2988,6 @@ class DockerCardEditor extends HTMLElement {
 }
 
 customElements.define('docker-card-editor', DockerCardEditor);
-
 
 // ── Device Monitor Card ───────────────────────────────────────────────────────
 
