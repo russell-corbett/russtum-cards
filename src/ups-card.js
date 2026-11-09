@@ -92,6 +92,13 @@ class UpsCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error('Invalid configuration');
     this._config = config;
+    // hass is set on every state change anywhere in HA, so build this list once.
+    this._watched = [
+      config.status_entity,
+      config.battery_entity,
+      config.runtime_entity,
+      config.load_entity,
+    ].filter(Boolean);
     this._render();
   }
 
@@ -100,16 +107,7 @@ class UpsCard extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
-    if (oldHass) {
-      const entities = [
-        this._config.status_entity,
-        this._config.battery_entity,
-        this._config.runtime_entity,
-        this._config.load_entity,
-      ].filter(Boolean);
-      const changed = entities.some(id => hass.states[id] !== oldHass.states[id]);
-      if (!changed) return;
-    }
+    if (oldHass && !this._watched.some(id => hass.states[id] !== oldHass.states[id])) return;
 
     this._render();
   }
@@ -159,7 +157,7 @@ class UpsCard extends HTMLElement {
         ? 'var(--warning-color, #ff9800)'
         : 'var(--primary-color, #03a9f4)';
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
 
@@ -322,6 +320,10 @@ class UpsCard extends HTMLElement {
         </div>
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
   }
 
   getCardSize() {

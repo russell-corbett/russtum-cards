@@ -67,6 +67,14 @@ class DockerCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error('Invalid configuration');
     this._config = config;
+    // hass is set on every state change anywhere in HA, so build this list once.
+    this._watched = [
+      config.host_entity,
+      config.containers_running_entity,
+      config.containers_total_entity,
+      config.images_entity,
+      ...(config.containers || []).flatMap(c => [c.status_entity, c.cpu_entity, c.ram_entity, c.disk_entity]),
+    ].filter(Boolean);
     this._render();
   }
 
@@ -75,21 +83,7 @@ class DockerCard extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
-    if (oldHass) {
-      const containers = this._config.containers || [];
-      const watched = [
-        this._config.host_entity,
-        this._config.containers_running_entity,
-        this._config.containers_total_entity,
-        this._config.images_entity,
-        ...containers.map(c => c.status_entity).filter(Boolean),
-        ...containers.map(c => c.cpu_entity).filter(Boolean),
-        ...containers.map(c => c.ram_entity).filter(Boolean),
-        ...containers.map(c => c.disk_entity).filter(Boolean),
-      ].filter(Boolean);
-      const changed = watched.some(id => hass.states[id] !== oldHass.states[id]);
-      if (!changed) return;
-    }
+    if (oldHass && !this._watched.some(id => hass.states[id] !== oldHass.states[id])) return;
 
     this._render();
   }
@@ -244,7 +238,7 @@ class DockerCard extends HTMLElement {
         </div>`;
     }).join('');
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
 
@@ -478,6 +472,10 @@ class DockerCard extends HTMLElement {
         ${containerRows}
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
   }
 
   getCardSize() {

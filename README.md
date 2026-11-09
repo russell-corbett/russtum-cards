@@ -266,3 +266,15 @@ player_list_entity: sensor.minecraft_server_players_list
 - **Latency signal icon** with colour coding: green ≤30ms, blue ≤80ms, orange ≤150ms, red >150ms
 - **Player chips** with deterministic avatar colours based on username — only shown when server is online and list is non-empty
 - **Accent bar** at the bottom of the header changes colour with server state (green/red/grey)
+
+---
+
+## Development
+
+Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
+
+To build locally instead (for testing before you push):
+
+```bash
+./build.sh
+```

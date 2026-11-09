@@ -64,6 +64,14 @@ class NasCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error('Invalid configuration');
     this._config = config;
+    // hass is set on every state change anywhere in HA, so build this list once.
+    this._watched = [
+      ...this._getDriveEntities().map(d => d.entity),
+      ...this._getNetworkEntities().map(n => n.entity),
+      config.status_entity,
+      config.temperature_entity,
+      config.uptime_entity,
+    ].filter(Boolean);
     this._render();
   }
 
@@ -72,17 +80,7 @@ class NasCard extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
-    if (oldHass) {
-      const watched = [
-        ...this._getDriveEntities().map(d => d.entity).filter(Boolean),
-        ...this._getNetworkEntities().map(n => n.entity).filter(Boolean),
-        this._config.status_entity,
-        this._config.temperature_entity,
-        this._config.uptime_entity,
-      ].filter(Boolean);
-      const changed = watched.some(id => hass.states[id] !== oldHass.states[id]);
-      if (!changed) return;
-    }
+    if (oldHass && !this._watched.some(id => hass.states[id] !== oldHass.states[id])) return;
 
     this._render();
   }
@@ -213,7 +211,7 @@ class NasCard extends HTMLElement {
     const showStats = config.temperature_entity || config.uptime_entity;
     const showNetwork = netInterfaces.length > 0;
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
 
@@ -438,6 +436,10 @@ class NasCard extends HTMLElement {
 
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
   }
 
   getCardSize() {

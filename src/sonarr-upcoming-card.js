@@ -24,16 +24,31 @@ class SonarrUpcomingCard extends HTMLElement {
     this._error       = null;
     this._refreshTimer = null;
     this._hasFetched  = false;
+    this._lastFetch   = 0;
+    this._onVisibility = () => { if (!document.hidden) this._resumePolling(); };
   }
 
+  // HA detaches cards when you switch views and re-attaches them on return,
+  // so polling must restart in connectedCallback, not only on first hass.
   connectedCallback() {
-    if (this._hass && this._config && !this._hasFetched) {
-      this._fetchUpcoming();
-    }
+    document.addEventListener('visibilitychange', this._onVisibility);
+    this._resumePolling();
   }
 
   disconnectedCallback() {
     this._clearTimer();
+    document.removeEventListener('visibilitychange', this._onVisibility);
+  }
+
+  _refreshMs() {
+    return (this._config?.refresh_minutes ?? 30) * 60000;
+  }
+
+  // Fetch now if the data is missing or stale, then (re)start the interval.
+  _resumePolling() {
+    if (!this.isConnected || !this._hass || !this._config?.entry_id) return;
+    if (Date.now() - this._lastFetch >= this._refreshMs()) this._fetchUpcoming();
+    this._startTimer();
   }
 
   _clearTimer() {
@@ -45,27 +60,33 @@ class SonarrUpcomingCard extends HTMLElement {
 
   _startTimer() {
     this._clearTimer();
-    const mins = this._config?.refresh_minutes ?? 30;
-    this._refreshTimer = setInterval(() => this._fetchUpcoming(), mins * 60000);
+    // Skip ticks while the browser tab is hidden; _onVisibility catches up on return.
+    this._refreshTimer = setInterval(() => {
+      if (!document.hidden) this._fetchUpcoming();
+    }, this._refreshMs());
   }
 
   setConfig(config) {
+    const prev = this._config;
     this._config = config;
+    if (prev && (prev.entry_id !== config.entry_id || prev.days !== config.days
+              || prev.refresh_minutes !== config.refresh_minutes)) {
+      this._lastFetch = 0;
+      this._resumePolling();
+    }
     this._render();
   }
 
   set hass(hass) {
     const firstSet = !this._hass;
     this._hass = hass;
-    if (firstSet && this._config?.entry_id) {
-      this._fetchUpcoming();
-      this._startTimer();
-    }
+    if (firstSet) this._resumePolling();
   }
 
   async _fetchUpcoming() {
-    if (!this._hass || !this._config?.entry_id) return;
+    if (!this._hass || !this._config?.entry_id || this._loading) return;
 
+    this._lastFetch = Date.now();
     this._loading = true;
     this._render();
 
@@ -223,7 +244,7 @@ class SonarrUpcomingCard extends HTMLElement {
       }).join('');
     }
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
         ha-card { overflow: hidden; padding: 0; }
@@ -395,6 +416,10 @@ class SonarrUpcomingCard extends HTMLElement {
         ${bodyHtml}
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
 
     this.shadowRoot.getElementById('refresh')?.addEventListener('click', () => {
       this._fetchUpcoming();

@@ -85,21 +85,43 @@ class DeviceMonitorCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._config = null;
     this._hass   = null;
-    this._prevStates = '';
+    this._watched = [];
+    this._clockTimer = null;
+  }
+
+  // "Last seen 5m ago" goes stale unless the entity changes, so re-render
+  // once a minute while any device has a last_seen_entity.
+  connectedCallback() {
+    this._startClock();
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._clockTimer);
+    this._clockTimer = null;
+  }
+
+  _startClock() {
+    clearInterval(this._clockTimer);
+    this._clockTimer = null;
+    const needsClock = (this._config?.devices || []).some(d => d.last_seen_entity);
+    if (!needsClock || !this.isConnected) return;
+    this._clockTimer = setInterval(() => { if (!document.hidden) this._render(); }, 60000);
   }
 
   setConfig(config) {
     this._config = config;
+    // hass is set on every state change anywhere in HA, so build this list once.
+    this._watched = this._watchedEntities();
+    this._startClock();
     this._render();
   }
 
   set hass(hass) {
+    const oldHass = this._hass;
     this._hass = hass;
-    // Only re-render when a watched entity changes
-    const watched = this._watchedEntities();
-    const sig = watched.map(id => `${id}:${hass.states[id]?.state ?? ''}`).join('|');
-    if (sig === this._prevStates) return;
-    this._prevStates = sig;
+    if (!this._config) return;
+    // Only the state string is rendered, so ignore attribute-only updates.
+    if (oldHass && !this._watched.some(id => hass.states[id]?.state !== oldHass.states[id]?.state)) return;
     this._render();
   }
 
@@ -191,7 +213,7 @@ class DeviceMonitorCard extends HTMLElement {
       </div>`;
     }).join('');
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
         ha-card { overflow: hidden; padding: 0; }
@@ -307,6 +329,10 @@ class DeviceMonitorCard extends HTMLElement {
         ${devices.length ? deviceGroupsHtml : `<div class="empty">No devices configured</div>`}
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
   }
 
   getCardSize() {

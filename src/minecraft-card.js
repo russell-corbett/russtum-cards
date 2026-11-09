@@ -71,6 +71,16 @@ class MinecraftCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error('Invalid configuration');
     this._config = config;
+    // hass is set on every state change anywhere in HA, so build this list once.
+    this._watched = [
+      config.status_entity,
+      config.players_entity,
+      config.max_players_entity,
+      config.latency_entity,
+      config.version_entity,
+      config.motd_entity,
+      config.player_list_entity,
+    ].filter(Boolean);
     this._render();
   }
 
@@ -79,19 +89,7 @@ class MinecraftCard extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
-    if (oldHass) {
-      const entities = [
-        this._config.status_entity,
-        this._config.players_entity,
-        this._config.max_players_entity,
-        this._config.latency_entity,
-        this._config.version_entity,
-        this._config.motd_entity,
-        this._config.player_list_entity,
-      ].filter(Boolean);
-      const changed = entities.some(id => hass.states[id] !== oldHass.states[id]);
-      if (!changed) return;
-    }
+    if (oldHass && !this._watched.some(id => hass.states[id] !== oldHass.states[id])) return;
 
     this._render();
   }
@@ -156,7 +154,7 @@ class MinecraftCard extends HTMLElement {
     const hasInfo = config.players_entity || config.version_entity;
     const motd = rawMotd && rawMotd !== 'unavailable' && rawMotd !== 'unknown' ? rawMotd : null;
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
         ha-card { overflow: hidden; padding: 0; }
@@ -386,6 +384,10 @@ class MinecraftCard extends HTMLElement {
         </div>` : ''}
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
   }
 
   getCardSize() {

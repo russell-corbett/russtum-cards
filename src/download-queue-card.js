@@ -99,13 +99,36 @@ class DownloadQueueCard extends HTMLElement {
     this._error        = null;
     this._refreshTimer = null;
     this._hasFetched   = false;
+    this._lastFetch    = 0;
+    this._onVisibility = () => { if (!document.hidden) this._resumePolling(); };
   }
 
+  // HA detaches cards when you switch views and re-attaches them on return,
+  // so polling must restart in connectedCallback, not only on first hass.
   connectedCallback() {
-    if (this._hass && this._config && !this._hasFetched) this._fetch();
+    document.addEventListener('visibilitychange', this._onVisibility);
+    this._resumePolling();
   }
 
-  disconnectedCallback() { this._clearTimer(); }
+  disconnectedCallback() {
+    this._clearTimer();
+    document.removeEventListener('visibilitychange', this._onVisibility);
+  }
+
+  _hasSource() {
+    return !!(this._config?.sonarr_entry_id || this._config?.radarr_entry_id);
+  }
+
+  _refreshMs() {
+    return (this._config?.refresh_minutes ?? 1) * 60000;
+  }
+
+  // Fetch now if the data is missing or stale, then (re)start the interval.
+  _resumePolling() {
+    if (!this.isConnected || !this._hass || !this._hasSource()) return;
+    if (Date.now() - this._lastFetch >= this._refreshMs()) this._fetch();
+    this._startTimer();
+  }
 
   _clearTimer() {
     if (this._refreshTimer) { clearInterval(this._refreshTimer); this._refreshTimer = null; }
@@ -113,25 +136,34 @@ class DownloadQueueCard extends HTMLElement {
 
   _startTimer() {
     this._clearTimer();
-    const mins = this._config?.refresh_minutes ?? 1;
-    this._refreshTimer = setInterval(() => this._fetch(), mins * 60000);
+    // Skip ticks while the browser tab is hidden; _onVisibility catches up on return.
+    this._refreshTimer = setInterval(() => {
+      if (!document.hidden) this._fetch();
+    }, this._refreshMs());
   }
 
   setConfig(config) {
+    const prev = this._config;
     this._config = config;
+    if (prev && (prev.sonarr_entry_id !== config.sonarr_entry_id
+              || prev.radarr_entry_id !== config.radarr_entry_id
+              || prev.refresh_minutes !== config.refresh_minutes)) {
+      this._lastFetch = 0;
+      this._resumePolling();
+    }
     this._render();
   }
 
   set hass(hass) {
     const firstSet = !this._hass;
     this._hass = hass;
-    const hasSource = this._config?.sonarr_entry_id || this._config?.radarr_entry_id;
-    if (firstSet && hasSource) { this._fetch(); this._startTimer(); }
+    if (firstSet) this._resumePolling();
   }
 
   async _fetch() {
     const cfg = this._config;
-    if (!this._hass || (!cfg?.sonarr_entry_id && !cfg?.radarr_entry_id)) return;
+    if (!this._hass || !this._hasSource() || this._loading) return;
+    this._lastFetch = Date.now();
     this._loading = true;
     this._render();
     const calls = [];
@@ -277,7 +309,7 @@ class DownloadQueueCard extends HTMLElement {
       }
     }
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
         ha-card { overflow: hidden; padding: 0; }
@@ -394,6 +426,10 @@ class DownloadQueueCard extends HTMLElement {
         ${bodyHtml}
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
 
     this.shadowRoot.getElementById('refresh')?.addEventListener('click', () => this._fetch());
   }

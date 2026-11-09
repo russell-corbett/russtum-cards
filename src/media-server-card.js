@@ -70,6 +70,21 @@ class MediaServerCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error('Invalid configuration');
     this._config = config;
+    // hass is set on every state change anywhere in HA, so build this list once.
+    this._watched = [
+      config.radarr_movies_entity,
+      config.radarr_queue_entity,
+      config.sonarr_series_entity,
+      config.sonarr_queue_entity,
+      config.disk_free_entity,
+      config.disk_total_entity,
+      config.disk_used_pct_entity,
+      config.jellyfin_clients_entity,
+      config.qbit_download_speed_entity,
+      config.qbit_upload_speed_entity,
+      config.qbit_download_total_entity,
+      config.qbit_upload_total_entity,
+    ].filter(Boolean);
     this._render();
   }
 
@@ -78,24 +93,7 @@ class MediaServerCard extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
-    if (oldHass) {
-      const entities = [
-        this._config.radarr_movies_entity,
-        this._config.radarr_queue_entity,
-        this._config.sonarr_series_entity,
-        this._config.sonarr_queue_entity,
-        this._config.disk_free_entity,
-        this._config.disk_total_entity,
-        this._config.disk_used_pct_entity,
-        this._config.jellyfin_clients_entity,
-        this._config.qbit_download_speed_entity,
-        this._config.qbit_upload_speed_entity,
-        this._config.qbit_download_total_entity,
-        this._config.qbit_upload_total_entity,
-      ].filter(Boolean);
-      const changed = entities.some(id => hass.states[id] !== oldHass.states[id]);
-      if (!changed) return;
-    }
+    if (oldHass && !this._watched.some(id => hass.states[id] !== oldHass.states[id])) return;
 
     this._render();
   }
@@ -189,7 +187,7 @@ class MediaServerCard extends HTMLElement {
 
     const showApps = showRadarr || showSonarr;
 
-    this.shadowRoot.innerHTML = `
+    const html = `
       <style>
         :host { display: block; }
         ha-card { padding: 16px 16px 14px; }
@@ -440,6 +438,10 @@ class MediaServerCard extends HTMLElement {
 
       </ha-card>
     `;
+    // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
   }
 
   getCardSize() {
