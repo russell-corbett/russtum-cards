@@ -330,7 +330,8 @@ class UpsCard extends HTMLElement {
     return 3;
   }
 
-  static getConfigElement() {
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
     return document.createElement('ups-card-editor');
   }
 
@@ -349,119 +350,26 @@ customElements.define('ups-card', UpsCard);
 
 // ── UPS Card Editor ───────────────────────────────────────────────────────────
 
-class UpsCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._config = {};
-    this._hass = null;
-    this._configStr = '';
-  }
-
-  setConfig(config) {
-    const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return;
-    this._configStr = incoming;
-    this._config = { ...config };
-    this._render();
-    Promise.resolve().then(() => {
-      this.dispatchEvent(new CustomEvent('config-changed', {
-        detail: { config: this._config },
-        bubbles: true,
-        composed: true,
-      }));
-    });
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-  }
-
-  _fire(config) {
-    this._config = { ...config };
-    this._configStr = JSON.stringify(config);
-    this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config: this._config },
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  _readVal(ev, el) {
-    if (ev.detail?.value !== undefined) return ev.detail.value;
-    const path = ev.composedPath?.() ?? [];
-    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
-    return inner?.value ?? el.value ?? '';
-  }
-
-  _bindText(id, key, type) {
-    const el = this.shadowRoot.getElementById(id);
-    if (!el) return;
-    const commit = (raw) => {
-      raw = (raw ?? '').trim();
-      const config = { ...this._config };
-      if (type === 'number') {
-        if (raw === '') delete config[key]; else config[key] = Number(raw);
-      } else if (type === 'array') {
-        const arr = raw.split(',').map(s => s.trim()).filter(Boolean);
-        if (arr.length) config[key] = arr; else delete config[key];
-      } else {
-        if (raw) config[key] = raw; else delete config[key];
-      }
-      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
-    };
-    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
-    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
-  }
-
-  _render() {
-    const c = this._config;
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; padding: 0 0 16px; }
-
-        .section-title {
-          font-size: 0.78em;
-          font-weight: 600;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          padding: 16px 0 8px;
-          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-          margin-bottom: 12px;
-        }
-
-        .row { display: flex; gap: 8px; margin-bottom: 8px; }
-        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
-      </style>
-
-      <!-- Basic -->
-      <div class="section-title">Basic</div>
-      <ha-textfield id="f-title" label="Title" value="${c.title || ''}"></ha-textfield>
-
-      <!-- Entities -->
-      <div class="section-title">Entities</div>
-      <ha-textfield id="f-status"   label="Status Entity (NUT status_data)"    value="${c.status_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-battery"  label="Battery Entity (%)"                 value="${c.battery_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-runtime"  label="Runtime Entity (seconds remaining)" value="${c.runtime_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-load"     label="Load Entity (%)"                    value="${c.load_entity || ''}"></ha-textfield>
-
-      <!-- Thresholds -->
-      <div class="section-title">Thresholds</div>
-      <div class="row">
-        <ha-textfield id="f-bat-low"   label="Battery Low (%)"  type="number" min="0" max="100" value="${c.battery_low_threshold ?? 20}"></ha-textfield>
-        <ha-textfield id="f-load-warn" label="Load Warning (%)" type="number" min="0" max="100" value="${c.load_warn_threshold ?? 80}"></ha-textfield>
-      </div>
-    `;
-
-    this._bindText('f-title',     'title');
-    this._bindText('f-status',    'status_entity');
-    this._bindText('f-battery',   'battery_entity');
-    this._bindText('f-runtime',   'runtime_entity');
-    this._bindText('f-load',      'load_entity');
-    this._bindText('f-bat-low',   'battery_low_threshold', 'number');
-    this._bindText('f-load-warn', 'load_warn_threshold', 'number');
+class UpsCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:power-plug-battery', schema: [f.text('title', 'Title')] },
+      { title: 'Entities', icon: 'mdi:format-list-bulleted', schema: [
+        f.entity('status_entity', 'Status', 'NUT status data, e.g. OL / OB / LB'),
+        f.grid(
+          f.entity('battery_entity', 'Battery charge (%)'),
+          f.entity('load_entity', 'Load (%)'),
+        ),
+        f.entity('runtime_entity', 'Runtime remaining', 'In seconds'),
+      ] },
+      { title: 'Thresholds', icon: 'mdi:tune-vertical', open: false, schema: [
+        f.grid(
+          f.number('battery_low_threshold', 'Battery low below', { min: 0, max: 100, unit: '%', helper: 'Default: 20' }),
+          f.number('load_warn_threshold', 'Load warning above', { min: 0, max: 100, unit: '%', helper: 'Default: 80' }),
+        ),
+      ] },
+    ];
   }
 }
 

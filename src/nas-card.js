@@ -446,7 +446,8 @@ class NasCard extends HTMLElement {
     return 3;
   }
 
-  static getConfigElement() {
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
     return document.createElement('nas-card-editor');
   }
 
@@ -464,293 +465,45 @@ customElements.define('nas-card', NasCard);
 
 // ── NAS Card Editor ───────────────────────────────────────────────────────────
 
-class NasCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._config = {};
-    this._hass = null;
-    this._configStr = '';
-  }
-
-  setConfig(config) {
-    const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return;
-    this._configStr = incoming;
-    this._config = { ...config };
-    this._render();
-    Promise.resolve().then(() => {
-      this.dispatchEvent(new CustomEvent('config-changed', {
-        detail: { config: this._config },
-        bubbles: true,
-        composed: true,
-      }));
-    });
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-  }
-
-  _fire(config) {
-    this._config = { ...config };
-    this._configStr = JSON.stringify(config);
-    this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config: this._config },
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  _structuralChange(config) {
-    this._fire(config);
-    this._render();
-  }
-
-  _readVal(ev, el) {
-    if (ev.detail?.value !== undefined) return ev.detail.value;
-    const path = ev.composedPath?.() ?? [];
-    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
-    return inner?.value ?? el.value ?? '';
-  }
-
-  _bindText(id, key, type) {
-    const el = this.shadowRoot.getElementById(id);
-    if (!el) return;
-    const commit = (raw) => {
-      raw = (raw ?? '').trim();
-      const config = { ...this._config };
-      if (type === 'number') {
-        if (raw === '') delete config[key]; else config[key] = Number(raw);
-      } else if (type === 'array') {
-        const arr = raw.split(',').map(s => s.trim()).filter(Boolean);
-        if (arr.length) config[key] = arr; else delete config[key];
-      } else {
-        if (raw) config[key] = raw; else delete config[key];
-      }
-      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
-    };
-    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
-    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
-  }
-
-  _render() {
-    const c = this._config;
-    const drives = c.drives || [];
-    const netIfaces = c.network_interfaces || [];
-    const liveStates = (c.live_states || ['active', 'on']).join(', ');
-    const netLiveStates = (c.network_live_states || ['on', 'connected', 'up']).join(', ');
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; padding: 0 0 16px; }
-
-        .section-title {
-          font-size: 0.78em;
-          font-weight: 600;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          padding: 16px 0 8px;
-          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-          margin-bottom: 12px;
-        }
-
-        .row { display: flex; gap: 8px; margin-bottom: 8px; }
-
-        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
-
-        .list-item {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 8px;
-          margin-bottom: 6px;
-          background: var(--secondary-background-color);
-          border-radius: 8px;
-        }
-        .list-item ha-textfield { flex: 1; margin-bottom: 0; }
-
-        .remove-btn {
-          background: none;
-          border: none;
-          cursor: pointer;
-          color: var(--secondary-text-color);
-          padding: 4px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex-shrink: 0;
-          line-height: 0;
-        }
-        .remove-btn:hover { color: var(--error-color, #f44336); background: rgba(244,67,54,0.08); }
-
-        .add-btn {
-          width: 100%;
-          background: none;
-          border: 1px dashed var(--primary-color, #03a9f4);
-          color: var(--primary-color, #03a9f4);
-          border-radius: 8px;
-          padding: 8px;
-          cursor: pointer;
-          font-size: 0.85em;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          margin-top: 4px;
-          margin-bottom: 8px;
-        }
-
-        p.hint {
-          font-size: 0.78em;
-          color: var(--secondary-text-color);
-          margin: 0 0 10px;
-          line-height: 1.4;
-        }
-      </style>
-
-      <!-- Basic -->
-      <div class="section-title">Basic</div>
-      <div class="row">
-        <ha-textfield id="f-title" label="Title" value="${c.title || ''}"></ha-textfield>
-        <ha-textfield id="f-total" label="Total Drives" type="number" min="1" value="${c.total_drives || ''}"></ha-textfield>
-      </div>
-      <ha-textfield id="f-live-states" label="Live States (comma-separated)" value="${liveStates}"></ha-textfield>
-      <ha-textfield id="f-status-entity" label="NAS Status Entity (for icon color)" value="${c.status_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-status-ok"   label="Status OK States (comma-separated)"      value="${(c.status_ok_states   || ['online','running','active','ok','on','healthy']).join(', ')}"></ha-textfield>
-      <ha-textfield id="f-status-warn" label="Status Warning States (comma-separated)" value="${(c.status_warn_states  || ['degraded','warning','degrading']).join(', ')}"></ha-textfield>
-
-      <!-- Drives -->
-      <div class="section-title">Drives</div>
-      <div id="drives-list">
-        ${drives.map((d, i) => `
-          <div class="list-item">
-            <ha-textfield data-idx="${i}" data-list="drive-entity" label="Entity ID" value="${d.entity || ''}"></ha-textfield>
-            <ha-textfield data-idx="${i}" data-list="drive-name" label="Name" value="${d.name || ''}"></ha-textfield>
-            <button class="remove-btn" data-idx="${i}" data-list="drive-remove" title="Remove">
-              <ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon>
-            </button>
-          </div>`).join('')}
-      </div>
-      <button class="add-btn" id="add-drive"><ha-icon icon="mdi:plus" style="--mdc-icon-size:16px"></ha-icon> Add Drive</button>
-
-      <!-- Temperature & Uptime -->
-      <div class="section-title">Temperature &amp; Uptime</div>
-      <ha-textfield id="f-temp-entity" label="Temperature Entity" value="${c.temperature_entity || ''}"></ha-textfield>
-      <div class="row">
-        <ha-textfield id="f-temp-warn" label="Warn (°C)" type="number" value="${c.temperature_warn ?? 60}"></ha-textfield>
-        <ha-textfield id="f-temp-high" label="High (°C)" type="number" value="${c.temperature_high ?? 75}"></ha-textfield>
-      </div>
-      <ha-textfield id="f-uptime-entity" label="Uptime Entity" value="${c.uptime_entity || ''}"></ha-textfield>
-
-      <!-- Network -->
-      <div class="section-title">Network</div>
-      <ha-textfield id="f-net-live" label="Link-Up States (comma-separated)" value="${netLiveStates}"></ha-textfield>
-      <div class="section-title">Interfaces</div>
-      <div id="net-list">
-        ${netIfaces.map((n, i) => `
-          <div class="list-item">
-            <ha-textfield data-idx="${i}" data-list="net-entity" label="Entity ID" value="${n.entity || ''}"></ha-textfield>
-            <ha-textfield data-idx="${i}" data-list="net-name" label="Name" value="${n.name || ''}"></ha-textfield>
-            <button class="remove-btn" data-idx="${i}" data-list="net-remove" title="Remove">
-              <ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon>
-            </button>
-          </div>`).join('')}
-      </div>
-      <button class="add-btn" id="add-net"><ha-icon icon="mdi:plus" style="--mdc-icon-size:16px"></ha-icon> Add Interface</button>
-    `;
-
-    const sr = this.shadowRoot;
-    if (this._hass) sr.querySelectorAll('ha-entity-picker').forEach(p => { p.hass = this._hass; });
-
-    // Simple text / number fields
-    this._bindText('f-title', 'title');
-    this._bindText('f-total', 'total_drives', 'number');
-    this._bindText('f-live-states', 'live_states', 'array');
-    this._bindText('f-status-ok',   'status_ok_states',  'array');
-    this._bindText('f-status-warn', 'status_warn_states', 'array');
-    this._bindText('f-temp-warn', 'temperature_warn', 'number');
-    this._bindText('f-temp-high', 'temperature_high', 'number');
-    this._bindText('f-net-live', 'network_live_states', 'array');
-
-    // Entity text fields
-    this._bindText('f-status-entity', 'status_entity');
-    this._bindText('f-temp-entity', 'temperature_entity');
-    this._bindText('f-uptime-entity', 'uptime_entity');
-
-    // Drives list
-    sr.querySelectorAll('[data-list="drive-entity"]').forEach(field => {
-      const handleDriveEntity = (ev) => {
-        const val = this._readVal(ev, field);
-        const i = Number(field.dataset.idx);
-        const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], entity: val };
-        this._fire({ ...this._config, drives });
-      };
-      field.addEventListener('value-changed', handleDriveEntity);
-      field.addEventListener('input', handleDriveEntity);
-    });
-    sr.querySelectorAll('[data-list="drive-name"]').forEach(field => {
-      const handleDriveName = (ev) => {
-        const val = this._readVal(ev, field);
-        const i = Number(field.dataset.idx);
-        const drives = [...(this._config.drives || [])];
-        drives[i] = { ...drives[i], name: val };
-        this._fire({ ...this._config, drives });
-      };
-      field.addEventListener('value-changed', handleDriveName);
-      field.addEventListener('input', handleDriveName);
-    });
-    sr.querySelectorAll('[data-list="drive-remove"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const drives = [...(this._config.drives || [])];
-        drives.splice(Number(btn.dataset.idx), 1);
-        const config = { ...this._config };
-        if (drives.length) config.drives = drives; else delete config.drives;
-        this._structuralChange(config);
-      });
-    });
-    sr.getElementById('add-drive')?.addEventListener('click', () => {
-      this._structuralChange({ ...this._config, drives: [...(this._config.drives || []), { entity: '', name: '' }] });
-    });
-
-    // Network interfaces list
-    sr.querySelectorAll('[data-list="net-entity"]').forEach(field => {
-      const handleNetEntity = (ev) => {
-        const val = this._readVal(ev, field);
-        const i = Number(field.dataset.idx);
-        const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], entity: val };
-        this._fire({ ...this._config, network_interfaces: ifaces });
-      };
-      field.addEventListener('value-changed', handleNetEntity);
-      field.addEventListener('input', handleNetEntity);
-    });
-    sr.querySelectorAll('[data-list="net-name"]').forEach(field => {
-      const handleNetName = (ev) => {
-        const val = this._readVal(ev, field);
-        const i = Number(field.dataset.idx);
-        const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces[i] = { ...ifaces[i], name: val };
-        this._fire({ ...this._config, network_interfaces: ifaces });
-      };
-      field.addEventListener('value-changed', handleNetName);
-      field.addEventListener('input', handleNetName);
-    });
-    sr.querySelectorAll('[data-list="net-remove"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const ifaces = [...(this._config.network_interfaces || [])];
-        ifaces.splice(Number(btn.dataset.idx), 1);
-        const config = { ...this._config };
-        if (ifaces.length) config.network_interfaces = ifaces; else delete config.network_interfaces;
-        this._structuralChange(config);
-      });
-    });
-    sr.getElementById('add-net')?.addEventListener('click', () => {
-      this._structuralChange({ ...this._config, network_interfaces: [...(this._config.network_interfaces || []), { entity: '', name: '' }] });
-    });
+class NasCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:nas', schema: [
+        f.grid(f.text('title', 'Title'), f.number('total_drives', 'Total bays', { min: 1, max: 64, helper: 'Empty slots show as open bays' })),
+        f.entity('status_entity', 'NAS status entity', 'Colours the NAS icon'),
+        f.grid(
+          f.states('status_ok_states', 'OK states', ['online', 'running', 'active', 'ok', 'on', 'healthy'], 'Default: online, running, active, ok, on, healthy'),
+          f.states('status_warn_states', 'Warning states', ['degraded', 'warning', 'degrading'], 'Default: degraded, warning, degrading'),
+        ),
+      ] },
+      { title: 'Drives', icon: 'mdi:harddisk', schema: [
+        f.states('live_states', 'Drive states that count as live', ['active', 'on', 'online', 'healthy', 'ok'], 'Default: active, on'),
+      ], list: {
+        key: 'drives',
+        schema: [f.grid(f.entity('entity', 'Drive entity'), f.text('name', 'Name'))],
+        label: (d, i) => d.name || d.entity || `Bay ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add drive',
+      } },
+      { title: 'Temperature & uptime', icon: 'mdi:thermometer', open: false, schema: [
+        f.entity('temperature_entity', 'Temperature entity'),
+        f.grid(
+          f.number('temperature_warn', 'Warning at', { unit: '°C', helper: 'Default: 60' }),
+          f.number('temperature_high', 'Critical at', { unit: '°C', helper: 'Default: 75' }),
+        ),
+        f.entity('uptime_entity', 'Uptime entity', 'Seconds, or a formatted string'),
+      ] },
+      { title: 'Network', icon: 'mdi:ethernet', open: false, schema: [
+        f.states('network_live_states', 'Link-up states', ['on', 'connected', 'up'], 'Default: on, connected, up'),
+      ], list: {
+        key: 'network_interfaces',
+        schema: [f.grid(f.entity('entity', 'Link entity'), f.text('name', 'Name'))],
+        label: (n, i) => n.name || n.entity || `Interface ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add interface',
+      } },
+    ];
   }
 }
 

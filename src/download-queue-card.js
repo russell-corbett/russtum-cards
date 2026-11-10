@@ -439,7 +439,10 @@ class DownloadQueueCard extends HTMLElement {
     return n ? 1 + n : 3;
   }
 
-  static getConfigElement() { return document.createElement('download-queue-card-editor'); }
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('download-queue-card-editor');
+  }
   static getStubConfig()    { return { title: 'Download Queue', sonarr_entry_id: '', radarr_entry_id: '' }; }
 }
 
@@ -447,77 +450,17 @@ customElements.define('download-queue-card', DownloadQueueCard);
 
 // ── Editor ────────────────────────────────────────────────────────────────────
 
-class DownloadQueueCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._config = {}; this._configStr = '';
-  }
-
-  setConfig(config) {
-    const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return;
-    this._configStr = incoming; this._config = { ...config };
-    this._render();
-    Promise.resolve().then(() => {
-      this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this._config }, bubbles: true, composed: true }));
-    });
-  }
-
-  set hass(_) {}
-
-  _readVal(ev, el) {
-    if (ev.detail?.value !== undefined) return String(ev.detail.value);
-    const path  = ev.composedPath?.() ?? [];
-    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
-    return inner?.value ?? el.value ?? '';
-  }
-
-  _fire(config) {
-    this._config = { ...config }; this._configStr = JSON.stringify(config);
-    this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this._config }, bubbles: true, composed: true }));
-  }
-
-  _bindText(id, key, type) {
-    const el = this.shadowRoot.getElementById(id);
-    if (!el) return;
-    const commit = (raw) => {
-      raw = (raw ?? '').trim();
-      const config = { ...this._config };
-      if (type === 'number') { if (raw === '') delete config[key]; else config[key] = Number(raw); }
-      else { if (raw) config[key] = raw; else delete config[key]; }
-      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
-    };
-    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
-    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
-  }
-
-  _render() {
-    const c = this._config;
-    const f = (k) => (c[k] ?? '').toString().replace(/"/g, '&quot;');
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host{display:block;padding-bottom:16px}
-        ha-textfield{display:block;width:100%;margin-bottom:8px}
-        .section{font-size:.78em;font-weight:600;color:var(--secondary-text-color);text-transform:uppercase;letter-spacing:.07em;padding:16px 0 8px;border-bottom:1px solid var(--divider-color,rgba(0,0,0,.12));margin-bottom:12px}
-        .hint{font-size:.75em;color:var(--secondary-text-color);margin:-4px 0 10px;line-height:1.4}
-        .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row2 ha-textfield{margin-bottom:0}
-      </style>
-      <div class="section">Basic</div>
-      <ha-textfield id="f-title"   label="Card Title"      value="${f('title')}"></ha-textfield>
-      <div class="section">Sources</div>
-      <ha-textfield id="f-sonarr" label="Sonarr Entry ID" value="${f('sonarr_entry_id')}"></ha-textfield>
-      <ha-textfield id="f-radarr" label="Radarr Entry ID" value="${f('radarr_entry_id')}"></ha-textfield>
-      <div class="hint">Leave blank to disable that source. Find entry IDs in Settings → Devices & Services.</div>
-      <div class="section">Options</div>
-      <div class="row2">
-        <ha-textfield id="f-refresh" label="Refresh (minutes)" type="number" min="1" max="60" value="${c.refresh_minutes ?? 1}"></ha-textfield>
-      </div>
-    `;
-    this._bindText('f-title',   'title');
-    this._bindText('f-sonarr',  'sonarr_entry_id');
-    this._bindText('f-radarr',  'radarr_entry_id');
-    this._bindText('f-refresh', 'refresh_minutes', 'number');
+class DownloadQueueCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:download', schema: [f.text('title', 'Title')] },
+      { title: 'Sources', icon: 'mdi:source-branch', schema: [
+        f.configEntry('sonarr_entry_id', 'Sonarr instance', 'sonarr', 'Leave empty to hide Sonarr'),
+        f.configEntry('radarr_entry_id', 'Radarr instance', 'radarr', 'Leave empty to hide Radarr'),
+        f.number('refresh_minutes', 'Refresh every', { min: 1, max: 60, unit: 'min', helper: 'Default: 1' }),
+      ] },
+    ];
   }
 }
 

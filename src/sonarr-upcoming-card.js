@@ -432,7 +432,8 @@ class SonarrUpcomingCard extends HTMLElement {
     return 1 + groups.reduce((acc, g) => acc + 1 + g.episodes.length, 0);
   }
 
-  static getConfigElement() {
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
     return document.createElement('sonarr-upcoming-card-editor');
   }
 
@@ -449,93 +450,21 @@ customElements.define('sonarr-upcoming-card', SonarrUpcomingCard);
 
 // ── Editor ────────────────────────────────────────────────────────────────────
 
-class SonarrUpcomingCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._config    = {};
-    this._configStr = '';
-  }
-
-  setConfig(config) {
-    const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return;
-    this._configStr = incoming;
-    this._config    = { ...config };
-    this._render();
-    Promise.resolve().then(() => {
-      this.dispatchEvent(new CustomEvent('config-changed', {
-        detail: { config: this._config }, bubbles: true, composed: true,
-      }));
-    });
-  }
-
-  set hass(_) {}
-
-  _readVal(ev, el) {
-    if (ev.detail?.value !== undefined) return String(ev.detail.value);
-    const path  = ev.composedPath?.() ?? [];
-    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
-    return inner?.value ?? el.value ?? '';
-  }
-
-  _fire(config) {
-    this._config    = { ...config };
-    this._configStr = JSON.stringify(config);
-    this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config: this._config }, bubbles: true, composed: true,
-    }));
-  }
-
-  _bindText(id, key, type) {
-    const el = this.shadowRoot.getElementById(id);
-    if (!el) return;
-    const commit = (raw) => {
-      raw = (raw ?? '').trim();
-      const config = { ...this._config };
-      if (type === 'number') {
-        if (raw === '') delete config[key]; else config[key] = Number(raw);
-      } else if (type === 'bool') {
-        config[key] = raw === 'true';
-      } else {
-        if (raw) config[key] = raw; else delete config[key];
-      }
-      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
-    };
-    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
-    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
-  }
-
-  _render() {
-    const c = this._config;
-    const f = (k) => (c[k] ?? '').toString().replace(/"/g, '&quot;');
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; padding-bottom: 16px; }
-        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
-        .section { font-size: 0.78em; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.07em; padding: 16px 0 8px; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12)); margin-bottom: 12px; }
-        .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-        .row2 ha-textfield { margin-bottom: 0; }
-        .hint { font-size: 0.75em; color: var(--secondary-text-color); margin: -4px 0 10px; line-height: 1.4; }
-      </style>
-
-      <div class="section">Basic</div>
-      <ha-textfield id="f-title" label="Card Title" value="${f('title')}"></ha-textfield>
-      <ha-textfield id="f-entry" label="Sonarr Entry ID" value="${f('entry_id')}"></ha-textfield>
-      <div class="hint">From your action config: <code>entry_id: 01KBC...</code></div>
-
-      <div class="section">Options</div>
-      <div class="row2">
-        <ha-textfield id="f-days"    label="Days ahead"         type="number" min="1" max="90"  value="${c.days ?? 7}"></ha-textfield>
-        <ha-textfield id="f-refresh" label="Refresh (minutes)"  type="number" min="5" max="1440" value="${c.refresh_minutes ?? 30}"></ha-textfield>
-      </div>
-    `;
-
-    this._bindText('f-title',   'title');
-    this._bindText('f-entry',   'entry_id');
-    this._bindText('f-days',    'days',            'number');
-    this._bindText('f-refresh', 'refresh_minutes', 'number');
+class SonarrUpcomingCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:television-classic', schema: [
+        f.text('title', 'Title'),
+        f.configEntry('entry_id', 'Sonarr instance', 'sonarr'),
+      ] },
+      { title: 'Options', icon: 'mdi:tune-vertical', schema: [
+        f.grid(
+          f.number('days', 'Days ahead', { min: 1, max: 90, helper: 'Default: 7' }),
+          f.number('refresh_minutes', 'Refresh every', { min: 5, max: 1440, unit: 'min', helper: 'Default: 30' }),
+        ),
+      ] },
+    ];
   }
 }
 

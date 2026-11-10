@@ -483,7 +483,8 @@ class DockerCard extends HTMLElement {
     return 2 + containers.length;
   }
 
-  static getConfigElement() {
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
     return document.createElement('docker-card-editor');
   }
 
@@ -513,248 +514,38 @@ customElements.define('docker-card', DockerCard);
 
 // ── Docker Card Editor ─────────────────────────────────────────────────────────
 
-class DockerCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._config = {};
-    this._hass = null;
-    this._configStr = '';
-  }
-
-  setConfig(config) {
-    const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return;
-    this._configStr = incoming;
-    this._config = { ...config };
-    this._render();
-    Promise.resolve().then(() => {
-      this.dispatchEvent(new CustomEvent('config-changed', {
-        detail: { config: this._config },
-        bubbles: true,
-        composed: true,
-      }));
-    });
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-  }
-
-  _fire(config) {
-    this._config = { ...config };
-    this._configStr = JSON.stringify(config);
-    this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config: this._config },
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  _structuralChange(config) {
-    this._fire(config);
-    this._render();
-  }
-
-  _readVal(ev, el) {
-    if (ev.detail?.value !== undefined) return ev.detail.value;
-    const path = ev.composedPath?.() ?? [];
-    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
-    return inner?.value ?? el.value ?? '';
-  }
-
-  _bindText(id, key, type) {
-    const el = this.shadowRoot.getElementById(id);
-    if (!el) return;
-    const commit = (raw) => {
-      raw = (raw ?? '').trim();
-      const config = { ...this._config };
-      if (type === 'number') {
-        if (raw === '') delete config[key]; else config[key] = Number(raw);
-      } else if (type === 'array') {
-        const arr = raw.split(',').map(s => s.trim()).filter(Boolean);
-        if (arr.length) config[key] = arr; else delete config[key];
-      } else {
-        if (raw) config[key] = raw; else delete config[key];
-      }
-      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
-    };
-    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
-    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
-  }
-
-  _render() {
-    const c = this._config;
-    const containers = c.containers || [];
-    const runningStates = (c.running_states || ['running']).join(', ');
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; padding: 0 0 16px; }
-
-        .section-title {
-          font-size: 0.78em;
-          font-weight: 600;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          padding: 16px 0 8px;
-          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-          margin-bottom: 12px;
-        }
-
-        .row { display: flex; gap: 8px; margin-bottom: 8px; }
-
-        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
-
-        .list-item {
-          padding: 10px;
-          margin-bottom: 8px;
-          background: var(--secondary-background-color);
-          border-radius: 8px;
-        }
-        .list-item-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          margin-bottom: 8px;
-        }
-        .list-item-title {
-          font-size: 0.8em;
-          font-weight: 600;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-        .list-item ha-textfield { margin-bottom: 6px; }
-        .list-item ha-textfield:last-of-type { margin-bottom: 0; }
-
-        .remove-btn {
-          background: none;
-          border: none;
-          cursor: pointer;
-          color: var(--secondary-text-color);
-          padding: 4px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex-shrink: 0;
-          line-height: 0;
-        }
-        .remove-btn:hover { color: var(--error-color, #f44336); background: rgba(244,67,54,0.08); }
-
-        .add-btn {
-          width: 100%;
-          background: none;
-          border: 1px dashed var(--primary-color, #03a9f4);
-          color: var(--primary-color, #03a9f4);
-          border-radius: 8px;
-          padding: 8px;
-          cursor: pointer;
-          font-size: 0.85em;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          margin-top: 4px;
-          margin-bottom: 8px;
-        }
-      </style>
-
-      <!-- Host -->
-      <div class="section-title">Host</div>
-      <div class="row">
-        <ha-textfield id="f-title"       label="Title"           value="${c.title || ''}"></ha-textfield>
-        <ha-textfield id="f-device-name" label="Device Name"     value="${c.device_name || ''}"></ha-textfield>
-      </div>
-      <div class="row">
-        <ha-textfield id="f-cpu-name" label="CPU Name"           value="${c.cpu_name || ''}"></ha-textfield>
-        <ha-textfield id="f-ram"      label="RAM"                value="${c.ram || ''}"></ha-textfield>
-      </div>
-      <ha-textfield id="f-gpu" label="GPU"                       value="${c.gpu || ''}"></ha-textfield>
-      <ha-textfield id="f-icon"  label="Icon (mdi:...)" value="${c.icon || 'mdi:docker'}"></ha-textfield>
-      <ha-textfield id="f-host-entity"       label="Host Status Entity (optional)"        value="${c.host_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-containers-running" label="Containers Running Entity"            value="${c.containers_running_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-containers-total"   label="Containers Total Entity"              value="${c.containers_total_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-images"             label="Images Total Entity"                  value="${c.images_entity || ''}"></ha-textfield>
-
-      <!-- Settings -->
-      <div class="section-title">Settings</div>
-      <ha-textfield id="f-running-states" label="Running States (comma-separated)" value="${runningStates}"></ha-textfield>
-      <ha-textfield id="f-cpu-warn"       label="CPU Warn Threshold (%)"  type="number" min="0" max="100" value="${c.cpu_warn ?? 70}"></ha-textfield>
-
-      <!-- Containers -->
-      <div class="section-title">Containers</div>
-      <div id="containers-list">
-        ${containers.map((ct, i) => `
-          <div class="list-item">
-            <div class="list-item-header">
-              <span class="list-item-title">Container ${i + 1}${ct.name ? ' — ' + ct.name : ''}</span>
-              <button class="remove-btn" data-idx="${i}" data-action="remove-container" title="Remove">
-                <ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon>
-              </button>
-            </div>
-            <div class="row">
-              <ha-textfield data-idx="${i}" data-field="name"   label="Name"          value="${ct.name || ''}"></ha-textfield>
-              <ha-textfield data-idx="${i}" data-field="icon"   label="Icon (mdi:...)" value="${ct.icon || ''}"></ha-textfield>
-            </div>
-            <ha-textfield data-idx="${i}" data-field="status_entity" label="Status Entity"  value="${ct.status_entity || ''}"></ha-textfield>
-            <ha-textfield data-idx="${i}" data-field="cpu_entity"    label="CPU Entity"     value="${ct.cpu_entity || ''}"></ha-textfield>
-            <ha-textfield data-idx="${i}" data-field="ram_entity"    label="RAM Entity"     value="${ct.ram_entity || ''}"></ha-textfield>
-            <ha-textfield data-idx="${i}" data-field="disk_entity"   label="Disk Entity"    value="${ct.disk_entity || ''}"></ha-textfield>
-          </div>`).join('')}
-      </div>
-      <button class="add-btn" id="add-container">
-        <ha-icon icon="mdi:plus" style="--mdc-icon-size:16px"></ha-icon> Add Container
-      </button>
-    `;
-
-    // Simple fields
-    this._bindText('f-title',              'title');
-    this._bindText('f-device-name',        'device_name');
-    this._bindText('f-cpu-name',           'cpu_name');
-    this._bindText('f-ram',                'ram');
-    this._bindText('f-gpu',                'gpu');
-    this._bindText('f-icon',               'icon');
-    this._bindText('f-host-entity',        'host_entity');
-    this._bindText('f-containers-running', 'containers_running_entity');
-    this._bindText('f-containers-total',   'containers_total_entity');
-    this._bindText('f-images',             'images_entity');
-    this._bindText('f-running-states',     'running_states', 'array');
-    this._bindText('f-cpu-warn',           'cpu_warn', 'number');
-
-    // Container field listeners
-    const sr = this.shadowRoot;
-    sr.querySelectorAll('[data-field]').forEach(field => {
-      const handleField = (ev) => {
-        const val = this._readVal(ev, field);
-        const i   = Number(field.dataset.idx);
-        const key = field.dataset.field;
-        const cts = [...(this._config.containers || [])];
-        cts[i] = { ...cts[i], [key]: val };
-        this._fire({ ...this._config, containers: cts });
-      };
-      field.addEventListener('value-changed', handleField);
-      field.addEventListener('input', handleField);
-    });
-
-    // Remove container
-    sr.querySelectorAll('[data-action="remove-container"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const cts = [...(this._config.containers || [])];
-        cts.splice(Number(btn.dataset.idx), 1);
-        const config = { ...this._config };
-        if (cts.length) config.containers = cts; else delete config.containers;
-        this._structuralChange(config);
-      });
-    });
-
-    // Add container
-    sr.getElementById('add-container')?.addEventListener('click', () => {
-      const cts = [...(this._config.containers || []), { name: '', status_entity: '' }];
-      this._structuralChange({ ...this._config, containers: cts });
-    });
+class DockerCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'Host', icon: 'mdi:docker', schema: [
+        f.grid(f.text('title', 'Title'), f.icon('icon', 'Icon', 'Default: mdi:docker')),
+        f.grid(f.text('device_name', 'Device name'), f.text('cpu_name', 'CPU')),
+        f.grid(f.text('ram', 'RAM'), f.text('gpu', 'GPU')),
+      ] },
+      { title: 'Host entities', icon: 'mdi:format-list-bulleted', open: false, schema: [
+        f.entity('host_entity', 'Host status'),
+        f.grid(f.entity('containers_running_entity', 'Containers running'), f.entity('containers_total_entity', 'Containers total')),
+        f.entity('images_entity', 'Images total'),
+      ] },
+      { title: 'Settings', icon: 'mdi:tune-vertical', open: false, schema: [
+        f.states('running_states', 'Running states', ['running', 'on', 'healthy', 'up'], 'Default: running'),
+        f.number('cpu_warn', 'CPU warning above', { min: 0, max: 100, unit: '%', helper: 'Default: 70' }),
+      ] },
+      { title: 'Containers', icon: 'mdi:package-variant-closed', list: {
+        key: 'containers',
+        collapsible: true,
+        schema: [
+          f.grid(f.text('name', 'Name'), f.icon('icon')),
+          f.entity('status_entity', 'Status'),
+          f.grid(f.entity('cpu_entity', 'CPU'), f.entity('ram_entity', 'RAM')),
+          f.entity('disk_entity', 'Disk'),
+        ],
+        label: (c, i) => c.name || c.status_entity || `Container ${i + 1}`,
+        newItem: () => ({ name: '', icon: 'mdi:docker' }),
+        addLabel: 'Add container',
+      } },
+    ];
   }
 }
 

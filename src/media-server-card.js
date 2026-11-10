@@ -448,7 +448,8 @@ class MediaServerCard extends HTMLElement {
     return 4;
   }
 
-  static getConfigElement() {
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
     return document.createElement('media-server-card-editor');
   }
 
@@ -463,140 +464,31 @@ customElements.define('media-server-card', MediaServerCard);
 
 // ── Media Server Card Editor ──────────────────────────────────────────────────
 
-class MediaServerCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._config = {};
-    this._hass = null;
-    this._configStr = '';
-  }
-
-  setConfig(config) {
-    const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return;
-    this._configStr = incoming;
-    this._config = { ...config };
-    this._render();
-    Promise.resolve().then(() => {
-      this.dispatchEvent(new CustomEvent('config-changed', {
-        detail: { config: this._config },
-        bubbles: true,
-        composed: true,
-      }));
-    });
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-  }
-
-  _fire(config) {
-    this._config = { ...config };
-    this._configStr = JSON.stringify(config);
-    this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config: this._config },
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  _readVal(ev, el) {
-    if (ev.detail?.value !== undefined) return ev.detail.value;
-    const path = ev.composedPath?.() ?? [];
-    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
-    return inner?.value ?? el.value ?? '';
-  }
-
-  _bind(id, key, type) {
-    const el = this.shadowRoot.getElementById(id);
-    if (!el) return;
-    const commit = (raw) => {
-      raw = (raw ?? '').trim();
-      const config = { ...this._config };
-      if (type === 'number') {
-        if (raw === '') delete config[key]; else config[key] = Number(raw);
-      } else if (type === 'array') {
-        const arr = raw.split(',').map(s => s.trim()).filter(Boolean);
-        if (arr.length) config[key] = arr; else delete config[key];
-      } else {
-        if (raw) config[key] = raw; else delete config[key];
-      }
-      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
-    };
-    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
-    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
-  }
-
-  _render() {
-    const c = this._config;
-    const f = key => c[key] || '';
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; padding: 0 0 16px; }
-        .section-title {
-          font-size: 0.78em;
-          font-weight: 600;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          padding: 16px 0 8px;
-          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-          margin-bottom: 12px;
-        }
-        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
-        .row { display: flex; gap: 8px; margin-bottom: 0; }
-        .row ha-textfield { margin-bottom: 8px; }
-      </style>
-
-      <div class="section-title">Basic</div>
-      <ha-textfield id="f-title" label="Title" value="${f('title')}"></ha-textfield>
-
-      <div class="section-title">Radarr</div>
-      <ha-textfield id="f-radarr-movies" label="Movies Entity"      value="${f('radarr_movies_entity')}"></ha-textfield>
-      <ha-textfield id="f-radarr-queue"  label="Queue Count Entity" value="${f('radarr_queue_entity')}"></ha-textfield>
-
-      <div class="section-title">Sonarr</div>
-      <ha-textfield id="f-sonarr-series" label="Series Entity"      value="${f('sonarr_series_entity')}"></ha-textfield>
-      <ha-textfield id="f-sonarr-queue"  label="Queue Count Entity" value="${f('sonarr_queue_entity')}"></ha-textfield>
-
-      <div class="section-title">Storage</div>
-      <ha-textfield id="f-disk-free"  label="Free Space Entity"                    value="${f('disk_free_entity')}"></ha-textfield>
-      <div class="row">
-        <ha-textfield id="f-disk-total-val"  label="Total Disk Size (number)" type="number" min="0" style="flex:2;" value="${c.disk_total != null ? c.disk_total : ''}"></ha-textfield>
-        <ha-textfield id="f-disk-total-unit" label="Unit"                                          style="flex:1;" value="${f('disk_total_unit') || 'TB'}"></ha-textfield>
-      </div>
-      <ha-textfield id="f-disk-pct"   label="Used % Entity (alternative to above)" value="${f('disk_used_pct_entity')}"></ha-textfield>
-
-      <div class="section-title">Jellyfin</div>
-      <ha-textfield id="f-jelly" label="Active Clients Entity" value="${f('jellyfin_clients_entity')}"></ha-textfield>
-
-      <div class="section-title">qBittorrent</div>
-      <div class="row">
-        <ha-textfield id="f-dl-speed" label="Download Speed Entity" value="${f('qbit_download_speed_entity')}"></ha-textfield>
-        <ha-textfield id="f-ul-speed" label="Upload Speed Entity"   value="${f('qbit_upload_speed_entity')}"></ha-textfield>
-      </div>
-      <div class="row">
-        <ha-textfield id="f-dl-total" label="Download Total Entity" value="${f('qbit_download_total_entity')}"></ha-textfield>
-        <ha-textfield id="f-ul-total" label="Upload Total Entity"   value="${f('qbit_upload_total_entity')}"></ha-textfield>
-      </div>
-    `;
-
-    this._bind('f-title',          'title');
-    this._bind('f-radarr-movies',  'radarr_movies_entity');
-    this._bind('f-radarr-queue',   'radarr_queue_entity');
-    this._bind('f-sonarr-series',  'sonarr_series_entity');
-    this._bind('f-sonarr-queue',   'sonarr_queue_entity');
-    this._bind('f-disk-free',      'disk_free_entity');
-    this._bind('f-disk-total-val', 'disk_total', 'number');
-    this._bind('f-disk-total-unit','disk_total_unit');
-    this._bind('f-disk-pct',       'disk_used_pct_entity');
-    this._bind('f-jelly',          'jellyfin_clients_entity');
-    this._bind('f-dl-speed',       'qbit_download_speed_entity');
-    this._bind('f-ul-speed',       'qbit_upload_speed_entity');
-    this._bind('f-dl-total',       'qbit_download_total_entity');
-    this._bind('f-ul-total',       'qbit_upload_total_entity');
+class MediaServerCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:server-network', schema: [f.text('title', 'Title')] },
+      { title: 'Radarr & Sonarr', icon: 'mdi:filmstrip', schema: [
+        f.grid(f.entity('radarr_movies_entity', 'Radarr movies'), f.entity('radarr_queue_entity', 'Radarr queue')),
+        f.grid(f.entity('sonarr_series_entity', 'Sonarr series'), f.entity('sonarr_queue_entity', 'Sonarr queue')),
+      ] },
+      { title: 'Storage', icon: 'mdi:harddisk', open: false, schema: [
+        f.entity('disk_free_entity', 'Free space'),
+        f.grid(
+          f.number('disk_total', 'Total disk size', { min: 0, step: 0.1 }),
+          f.select('disk_total_unit', 'Unit', ['TB', 'GB', 'TiB', 'GiB'], 'Default: TB'),
+        ),
+        f.entity('disk_used_pct_entity', 'Used % (instead of the two above)'),
+      ] },
+      { title: 'Jellyfin', icon: 'mdi:play-network', open: false, schema: [
+        f.entity('jellyfin_clients_entity', 'Active clients'),
+      ] },
+      { title: 'qBittorrent', icon: 'mdi:download-network', open: false, schema: [
+        f.grid(f.entity('qbit_download_speed_entity', 'Download speed'), f.entity('qbit_upload_speed_entity', 'Upload speed')),
+        f.grid(f.entity('qbit_download_total_entity', 'Downloaded total'), f.entity('qbit_upload_total_entity', 'Uploaded total')),
+      ] },
+    ];
   }
 }
 

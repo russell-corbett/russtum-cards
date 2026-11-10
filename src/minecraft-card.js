@@ -394,7 +394,8 @@ class MinecraftCard extends HTMLElement {
     return 3;
   }
 
-  static getConfigElement() {
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
     return document.createElement('minecraft-card-editor');
   }
 
@@ -414,114 +415,21 @@ customElements.define('minecraft-card', MinecraftCard);
 
 // ── Minecraft Card Editor ──────────────────────────────────────────────────────
 
-class MinecraftCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._config = {};
-    this._configStr = '';
-  }
-
-  setConfig(config) {
-    const incoming = JSON.stringify(config);
-    if (this._configStr === incoming) return;
-    this._configStr = incoming;
-    this._config = { ...config };
-    this._render();
-    Promise.resolve().then(() => {
-      this.dispatchEvent(new CustomEvent('config-changed', {
-        detail: { config: this._config },
-        bubbles: true,
-        composed: true,
-      }));
-    });
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-  }
-
-  _fire(config) {
-    this._config = { ...config };
-    this._configStr = JSON.stringify(config);
-    this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config: this._config },
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  _readVal(ev, el) {
-    if (ev.detail?.value !== undefined) return ev.detail.value;
-    const path = ev.composedPath?.() ?? [];
-    const inner = path.find(n => n instanceof HTMLInputElement || n instanceof HTMLTextAreaElement);
-    return inner?.value ?? el.value ?? '';
-  }
-
-  _bind(id, key, type) {
-    const el = this.shadowRoot.getElementById(id);
-    if (!el) return;
-    const commit = (raw) => {
-      raw = (raw ?? '').trim();
-      const config = { ...this._config };
-      if (type === 'number') {
-        if (raw === '') delete config[key]; else config[key] = Number(raw);
-      } else if (type === 'array') {
-        const arr = raw.split(',').map(s => s.trim()).filter(Boolean);
-        if (arr.length) config[key] = arr; else delete config[key];
-      } else {
-        if (raw) config[key] = raw; else delete config[key];
-      }
-      if (JSON.stringify(config) !== JSON.stringify(this._config)) this._fire(config);
-    };
-    el.addEventListener('value-changed', (ev) => commit(this._readVal(ev, el)));
-    el.addEventListener('input',         (ev) => commit(this._readVal(ev, el)));
-  }
-
-  _render() {
-    const c = this._config;
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; padding: 0 0 16px; }
-        .section-title {
-          font-size: 0.78em;
-          font-weight: 600;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          padding: 16px 0 8px;
-          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-          margin-bottom: 12px;
-        }
-        ha-textfield { display: block; width: 100%; margin-bottom: 8px; }
-        .row { display: flex; gap: 8px; margin-bottom: 8px; }
-        .row ha-textfield { margin-bottom: 0; }
-      </style>
-
-      <div class="section-title">Basic</div>
-      <ha-textfield id="f-title" label="Title"         value="${c.title || ''}"></ha-textfield>
-      <ha-textfield id="f-icon"  label="Icon (mdi:...)" value="${c.icon || ''}"></ha-textfield>
-
-      <div class="section-title">Server Entities</div>
-      <ha-textfield id="f-status"  label="Status Entity (binary_sensor or text)"  value="${c.status_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-players" label="Players Online Entity"                   value="${c.players_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-max"     label="Max Players Entity (optional)"           value="${c.max_players_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-latency" label="Latency Entity (ms, optional)"           value="${c.latency_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-version" label="Version Entity (optional)"               value="${c.version_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-motd"    label="MOTD Entity (optional)"                  value="${c.motd_entity || ''}"></ha-textfield>
-      <ha-textfield id="f-plist"   label="Player List Entity (JSON array or CSV)"  value="${c.player_list_entity || ''}"></ha-textfield>
-    `;
-
-    this._bind('f-title',   'title');
-    this._bind('f-icon',    'icon');
-    this._bind('f-status',  'status_entity');
-    this._bind('f-players', 'players_entity');
-    this._bind('f-max',     'max_players_entity');
-    this._bind('f-latency', 'latency_entity');
-    this._bind('f-version', 'version_entity');
-    this._bind('f-motd',    'motd_entity');
-    this._bind('f-plist',   'player_list_entity');
+class MinecraftCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:minecraft', schema: [
+        f.grid(f.text('title', 'Title'), f.icon('icon')),
+      ] },
+      { title: 'Server entities', icon: 'mdi:server', schema: [
+        f.entity('status_entity', 'Status', 'binary_sensor or text sensor'),
+        f.grid(f.entity('players_entity', 'Players online'), f.entity('max_players_entity', 'Max players')),
+        f.grid(f.entity('latency_entity', 'Latency (ms)'), f.entity('version_entity', 'Version')),
+        f.entity('motd_entity', 'Message of the day'),
+        f.entity('player_list_entity', 'Player list', 'JSON array or comma-separated names'),
+      ] },
+    ];
   }
 }
 
