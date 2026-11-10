@@ -106,12 +106,12 @@ class RoomOverviewCard extends HTMLElement {
 
   _climateTile(id) {
     const s = this._st(id);
-    // "Ensuite Thermostat" → "Ensuite"; the room's own thermostat is just "Heat".
+    // "Ensuite Thermostat" → "Ensuite"; a room's only thermostat is just "Thermostat".
     const name = this._config.climate.length > 1
-      ? (this._short(s?.attributes?.friendly_name || id).replace(/\s*thermostat$/i, '') || 'Heat')
-      : 'Heat';
+      ? (this._short(s?.attributes?.friendly_name || id).replace(/\s*thermostat$/i, '') || 'Thermostat')
+      : 'Thermostat';
     if (!s || s.state === 'unavailable') {
-      return `<div class="tile ct na" data-act="more" data-e="${roEsc(id)}"><div class="ti"><ha-icon icon="mdi:thermostat-off"></ha-icon></div>
+      return `<div class="tile ct na" data-act="more" data-e="${roEsc(id)}"><div class="ti"><ha-icon icon="mdi:thermometer-off"></ha-icon></div>
         <div class="tb"><div class="tn">${roEsc(name)}</div><div class="ts">Unavailable</div></div></div>`;
     }
     const a = s.attributes;
@@ -120,17 +120,19 @@ class RoomOverviewCard extends HTMLElement {
     const heating = action === 'heating', cooling = action === 'cooling';
     const target = this._pending[id] ?? (a.temperature != null ? Number(a.temperature) : null);
     const step = a.target_temp_step || 0.5;
-    const status = off ? 'Off' : heating ? 'Heating' : cooling ? 'Cooling' : action === 'idle' ? 'Idle' : (s.state.charAt(0).toUpperCase() + s.state.slice(1));
+    const mode = s.state.charAt(0).toUpperCase() + s.state.slice(1).replace(/_/g, ' ');
+    const status = off ? 'Off' : heating ? 'Heating' : cooling ? 'Cooling' : action === 'idle' ? `Idle · ${mode}` : mode;
     return `
       <div class="tile ct ${heating ? 'heat' : cooling ? 'cool' : ''} ${off ? 'off' : ''}">
-        <div class="ti" data-act="more" data-e="${roEsc(id)}"><ha-icon icon="${heating ? 'mdi:fire' : cooling ? 'mdi:snowflake' : off ? 'mdi:thermostat-off' : 'mdi:thermostat'}"></ha-icon></div>
-        <div class="tb" data-act="more" data-e="${roEsc(id)}"><div class="tn">${roEsc(name)}</div><div class="ts">${status}</div></div>
+        <div class="ti" data-act="more" data-e="${roEsc(id)}"><ha-icon icon="${heating ? 'mdi:fire' : cooling ? 'mdi:snowflake' : 'mdi:thermostat'}"></ha-icon></div>
+        <div class="tb" data-act="more" data-e="${roEsc(id)}"><div class="tn">${name === 'Thermostat' ? '<span class="nl">Thermostat</span><span class="ns">Temp</span>' : roEsc(name)}</div><div class="ts">${status}</div></div>
         ${!off && target != null ? `
           <div class="step">
             <button data-act="temp" data-e="${roEsc(id)}" data-d="${-step}" title="Lower">−</button>
             <span class="tv ${this._pending[id] != null ? 'pend' : ''}">${target.toFixed(step < 1 ? 1 : 0)}°</span>
             <button data-act="temp" data-e="${roEsc(id)}" data-d="${step}" title="Raise">+</button>
           </div>` : ''}
+        ${off ? `<button class="pwr" data-act="hvac-on" data-e="${roEsc(id)}" title="Turn on"><ha-icon icon="mdi:power"></ha-icon></button>` : ''}
       </div>`;
   }
 
@@ -149,11 +151,15 @@ class RoomOverviewCard extends HTMLElement {
       </div>`;
   }
 
-  // Drop the room name from entity names ("Family Room Lights" → "Lights").
+  // Drop the room's words from the front of entity names:
+  // "Family Room Lights" → "Lights", and in "Dining/Gaming Room", "Dining Room Lights" → "Lights".
   _short(full) {
-    const room = this._name();
-    let n = String(full);
-    if (room && n.toLowerCase().startsWith(room.toLowerCase() + ' ')) n = n.slice(room.length + 1);
+    const names = [this._name(), this._hass?.areas?.[this._config.area]?.name].filter(Boolean).join(' ');
+    const roomWords = new Set(names.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean).flatMap((w) => [w, w.replace(/'s$/, '')]));
+    const words = String(full).split(/\s+/);
+    let i = 0;
+    while (i < words.length - 1 && roomWords.has(words[i].toLowerCase().replace(/[^a-z0-9']/g, ''))) i++;
+    const n = words.slice(i).join(' ');
     return n.charAt(0).toUpperCase() + n.slice(1);
   }
 
@@ -172,7 +178,13 @@ class RoomOverviewCard extends HTMLElement {
     const anyOn = c.lights.some((id) => this._st(id)?.state === 'on');
     const heating = c.climate.some((id) => this._st(id)?.attributes?.hvac_action === 'heating');
 
-    const tiles = [...c.lights.map((id) => this._lightTile(id)), ...c.climate.map((id) => this._climateTile(id))];
+    const lightTiles = c.lights.map((id) => this._lightTile(id));
+    const climateTiles = c.climate.map((id) => this._climateTile(id));
+    const tiles = [...lightTiles, ...climateTiles];
+    // Several thermostats get their own row so tiles don't squeeze three-across.
+    const tileRows = c.climate.length > 1 && lightTiles.length
+      ? [lightTiles, climateTiles]
+      : tiles.length ? [tiles] : [];
     const chips = c.entities.map((e) => this._chip(e));
 
     const html = `
@@ -196,6 +208,7 @@ class RoomOverviewCard extends HTMLElement {
         .readings b { color: var(--primary-text-color); font-weight: 600; }
         .heat-badge { color: var(--state-climate-heat-color, #ff8100); }
 
+        .tiles + .tiles { margin-top: 8px; }
         .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
         .tile { container-type: inline-size; position: relative; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 10px; border-radius: 14px; overflow: hidden;
                 background: var(--secondary-background-color, rgba(127,127,127,.08)); box-sizing: border-box; min-width: 0; }
@@ -203,7 +216,7 @@ class RoomOverviewCard extends HTMLElement {
               --mdc-icon-size: 20px; background: rgba(127,127,127,.15); color: var(--secondary-text-color); }
         .tb { position: relative; flex: 1; min-width: 0; }
         .tn { font-size: .86em; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .ts { font-size: .75em; color: var(--secondary-text-color); white-space: nowrap; }
+        .ts { font-size: .75em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .na { opacity: .5; }
 
         .lt { cursor: pointer; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
@@ -216,14 +229,18 @@ class RoomOverviewCard extends HTMLElement {
         .ct.heat .ts { color: var(--state-climate-heat-color, #ff8100); font-weight: 600; }
         .ct.cool .ti { background: rgba(33,150,243,.18); color: var(--state-climate-cool-color, #2196f3); }
         .ct.off .ti { opacity: .6; }
+        .pwr { flex-shrink: 0; width: 34px; height: 34px; border: none; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center;
+               background: rgba(127,127,127,.12); color: var(--secondary-text-color); --mdc-icon-size: 18px; }
+        .pwr:hover { background: rgba(127,127,127,.22); color: var(--primary-text-color); }
         .step { display: flex; align-items: center; gap: 2px; flex-shrink: 0; border-radius: 10px; background: rgba(127,127,127,.12); }
         .step button { width: 28px; height: 30px; border: none; background: none; cursor: pointer; border-radius: 8px; font-size: 1.15em; line-height: 1;
                        color: var(--primary-text-color); }
         .step button:hover { background: rgba(127,127,127,.2); }
         .tv { min-width: 40px; text-align: center; font-weight: 700; font-size: .95em; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
         .tv.pend { color: var(--primary-color, #03a9f4); }
+        .ns { display: none; }
         /* Narrow climate tiles: drop the round icon so the name and stepper fit. */
-        @container (max-width: 200px) { .ct .ti { display: none; } .ct { gap: 6px; } .step button { width: 26px; } .tv { min-width: 36px; } }
+        @container (max-width: 200px) { .ct .ti { display: none; } .ct { gap: 6px; } .step button { width: 26px; } .tv { min-width: 36px; } .nl { display: none; } .ns { display: inline; } }
 
         .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: ${tiles.length ? 8 : 0}px; }
         .chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 5px 10px 5px 7px; border-radius: 16px; cursor: pointer;
@@ -243,7 +260,7 @@ class RoomOverviewCard extends HTMLElement {
             ${temp ? `<span data-act="more" data-e="${roEsc(temp.id)}"><ha-icon icon="mdi:thermometer"></ha-icon><b>${temp.v.toFixed(1)}</b>${roEsc(temp.unit.replace('°C', '°').replace('°F', '°'))}</span>` : ''}
           </div>
         </div>
-        ${tiles.length ? `<div class="tiles">${tiles.join('')}</div>` : ''}
+        ${tileRows.map((row) => `<div class="tiles">${row.join('')}</div>`).join('')}
         ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
       </ha-card>`;
     if (html === this._lastHtml) return;
@@ -266,6 +283,12 @@ class RoomOverviewCard extends HTMLElement {
       if (ev.target.closest('.readings span')) return;
       history.pushState(null, '', this._config.navigate);
       window.dispatchEvent(new CustomEvent('location-changed', { detail: { replace: false } }));
+    } else if (act === 'hvac-on') {
+      const id = el.dataset.e;
+      const modes = this._st(id)?.attributes?.hvac_modes || [];
+      const mode = ['heat', 'heat_cool', 'auto', 'cool'].find((m) => modes.includes(m)) || modes.find((m) => m !== 'off');
+      if (mode) this._hass.callService('climate', 'set_hvac_mode', { entity_id: id, hvac_mode: mode });
+      else this._more(id);
     } else if (act === 'temp') {
       // Batch quick taps: update the number now, send one service call after a short pause.
       const id = el.dataset.e;
