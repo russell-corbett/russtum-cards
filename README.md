@@ -404,6 +404,50 @@ exclude: [Kitchen Pico]
 
 ---
 
+## Komodo Card
+
+Every server Komodo manages, found automatically: a status light, active alerts (disk, memory, CPU…), CPU / memory / disk ring gauges with free space, and load. Servers with problems sort first.
+
+```yaml
+type: custom:komodo-card
+warn: 80
+critical: 90
+exclude: [Homepage]      # optional
+```
+
+---
+
+## Service Status Card
+
+A status page. Every Uptime Kuma monitor is included automatically; add UptimeRobot, Ping or any other up/down sensor under `extra`. Each row has a status light, response time, a 24-hour history bar from Home Assistant's recorder, uptime (hover for 30-day and 1-year) and certificate expiry warnings.
+
+```yaml
+type: custom:service-status-card
+title: Services
+groups:
+  - name: Self-hosted
+    monitors: [Home Assistant, My Website, Jellyfin, Jellyseerr]
+  - name: Internet
+    monitors: [Google, Amazon, Cloudflare, Microsoft, Oracle, Bell]
+extra:
+  - entity: binary_sensor.minecraftmap_russellcorbett_ca
+    name: Minecraft Map
+    group: Self-hosted
+```
+
+---
+
+## Home Assistant Health Card
+
+A checklist for Home Assistant itself: backups (age, size, next run, failures), pending updates (core, add-ons, HACS, blueprints), Spook repairs, Watchman's missing entities with where they're referenced, and CPU / memory / disk / uptime. Everything is detected automatically.
+
+```yaml
+type: custom:ha-health-card
+backup_max_age: 26     # hours
+```
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.

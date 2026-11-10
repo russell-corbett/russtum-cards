@@ -6449,4 +6449,932 @@ class BatteryCardEditor extends window.RusstumEditor {
 customElements.define('battery-card-editor', BatteryCardEditor);
 })();
 
-console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer · Media · Security · Parcels · Flights · EV · Batteries ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');
+// ═══ src/komodo-card.js ═══
+(() => {
+/**
+ * Komodo Card for Home Assistant (Komodo integration)
+ *
+ * Every server Komodo manages, found automatically: a status light, its
+ * active alerts, CPU / memory / disk gauges, free space and load. Servers
+ * with problems sort to the top.
+ *
+ * Configuration:
+ *   type: custom:komodo-card
+ *   title: Komodo
+ *   warn: 80            # Gauge turns amber at this % (default 80)
+ *   critical: 90        # …and red at this % (default 90)
+ *   servers: [immich, media-docker]   # Optional: only these, in this order
+ *   exclude: [Homepage]               # Optional: skip these
+ */
+
+const KO_METRICS = ['server_state', 'alerts', 'cpu_usage', 'memory_usage', 'disk_usage', 'memory_total',
+  'memory_free', 'disk_total', 'disk_free', 'load_average_1m', 'stack_count', 'service_count'];
+const KO_ALERT_NAMES = { ServerDisk: 'Disk', ServerMem: 'Memory', ServerCpu: 'CPU', ServerUnreachable: 'Unreachable',
+  ServerVersionMismatch: 'Version', ContainerStateChange: 'Container', StackStateChange: 'Stack' };
+
+const koEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const koGB = (v) => (v == null ? '—' : v >= 1000 ? `${(v / 1024).toFixed(1)} TB` : `${v >= 100 ? Math.round(v) : v.toFixed(1)} GB`);
+
+class KomodoCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._servers = [];
+    this._watched = [];
+    this._resolvedFor = null;
+    this.shadowRoot.addEventListener('click', (ev) => {
+      const el = ev.target.closest('[data-e]');
+      if (el) this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+    });
+  }
+
+  setConfig(config) {
+    this._config = config || {};
+    this._resolvedFor = null;
+    if (this._hass) this._resolve();
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) this._resolve();
+    else if (old && !this._watched.some((id) => hass.states[id] !== old.states[id])) return;
+    this._render();
+  }
+
+  // Group Komodo's sensors by server (device), keyed by what each one measures.
+  _resolve() {
+    const hass = this._hass;
+    this._resolvedFor = hass.entities;
+    const byDev = {};
+    for (const e of Object.values(hass.entities || {})) {
+      if (e.platform !== 'komodo' || !e.device_id || !e.entity_id.startsWith('sensor.')) continue;
+      const metric = KO_METRICS.find((m) => e.entity_id.endsWith('_' + m));
+      if (!metric) continue;
+      const d = (byDev[e.device_id] ||= { id: e.device_id, ids: {} });
+      d.ids[metric] = e.entity_id;
+    }
+    this._servers = Object.values(byDev).map((d) => {
+      const dev = hass.devices?.[d.id];
+      return { ...d, name: dev?.name_by_user || dev?.name || d.id };
+    });
+    this._watched = this._servers.flatMap((s) => Object.values(s.ids));
+  }
+
+  _num(id) {
+    const v = parseFloat(this._hass?.states[id]?.state);
+    return isNaN(v) ? null : v;
+  }
+
+  _gauge(label, pct, sub, entity) {
+    const warn = this._config.warn ?? 80, crit = this._config.critical ?? 90;
+    const tone = pct == null ? 'na' : pct >= crit ? 'crit' : pct >= warn ? 'warn' : 'ok';
+    const r = 17, c = 2 * Math.PI * r;
+    const off = c * (1 - Math.max(0, Math.min(100, pct ?? 0)) / 100);
+    return `
+      <div class="g ${tone}" data-e="${koEsc(entity || '')}" title="${label}: ${pct == null ? 'unknown' : pct.toFixed(1) + '%'}${sub ? ' · ' + sub : ''}">
+        <svg viewBox="0 0 42 42"><circle class="trk" cx="21" cy="21" r="${r}"/>
+          <circle class="val" cx="21" cy="21" r="${r}" stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}"/></svg>
+        <div class="gv">${pct == null ? '—' : Math.round(pct)}<small>%</small></div>
+        <div class="gl">${label}</div>
+        ${sub ? `<div class="gs">${koEsc(sub)}</div>` : ''}
+      </div>`;
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    const hass = this._hass;
+    const crit = cfg.critical ?? 90, warn = cfg.warn ?? 80;
+    const only = (cfg.servers || []).map((s) => String(s).toLowerCase());
+    const exclude = (cfg.exclude || []).map((s) => String(s).toLowerCase());
+
+    let servers = this._servers
+      .filter((s) => !exclude.includes(s.name.toLowerCase()))
+      .filter((s) => !only.length || only.includes(s.name.toLowerCase()))
+      .map((s) => {
+        const st = hass?.states[s.ids.server_state]?.state;
+        const alertsRaw = hass?.states[s.ids.alerts]?.state || '';
+        const alerts = alertsRaw && !['unknown', 'unavailable'].includes(alertsRaw)
+          ? [...new Set(alertsRaw.split(',').map((a) => a.trim()).filter(Boolean))] : [];
+        const cpu = this._num(s.ids.cpu_usage), mem = this._num(s.ids.memory_usage), disk = this._num(s.ids.disk_usage);
+        const worst = Math.max(cpu ?? 0, mem ?? 0, disk ?? 0);
+        const status = st === 'OK' ? 'ok' : st === 'NOTOK' ? 'down' : st === 'DISABLED' ? 'disabled' : 'unknown';
+        const rank = status === 'down' ? 0 : worst >= crit || alerts.length ? 1 : worst >= warn ? 2 : 3;
+        return { ...s, status, alerts, cpu, mem, disk, rank };
+      });
+    if (only.length) servers.sort((a, b) => only.indexOf(a.name.toLowerCase()) - only.indexOf(b.name.toLowerCase()));
+    else servers.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
+
+    const down = servers.filter((s) => s.status === 'down').length;
+    const alertCount = servers.reduce((n, s) => n + s.alerts.length, 0);
+    const headTone = down ? 'crit' : alertCount ? 'warn' : 'ok';
+    const summary = down ? `${down} server${down > 1 ? 's' : ''} down`
+      : alertCount ? `${alertCount} alert${alertCount > 1 ? 's' : ''}` : 'All servers healthy';
+
+    const cards = servers.map((s) => {
+      const memFree = this._num(s.ids.memory_free), memTot = this._num(s.ids.memory_total);
+      const diskFree = this._num(s.ids.disk_free), diskTot = this._num(s.ids.disk_total);
+      const load = this._num(s.ids.load_average_1m);
+      return `
+        <div class="srv s-${s.status}">
+          <div class="sh" data-e="${koEsc(s.ids.server_state || '')}">
+            <span class="dot"></span>
+            <span class="sn">${koEsc(s.name)}</span>
+            ${s.status !== 'ok' ? `<span class="st">${s.status === 'down' ? 'Down' : s.status === 'disabled' ? 'Disabled' : 'Unknown'}</span>` : ''}
+          </div>
+          ${s.alerts.length ? `<div class="al">${s.alerts.map((a) => `<span><ha-icon icon="mdi:alert"></ha-icon>${koEsc(KO_ALERT_NAMES[a] || a)}</span>`).join('')}</div>` : ''}
+          <div class="gs-row">
+            ${this._gauge('CPU', s.cpu, load != null ? `load ${load.toFixed(2)}` : '', s.ids.cpu_usage)}
+            ${this._gauge('Memory', s.mem, memFree != null ? `${koGB(memFree)} free` : '', s.ids.memory_usage)}
+            ${this._gauge('Disk', s.disk, diskFree != null ? `${koGB(diskFree)} free` : '', s.ids.disk_usage)}
+          </div>
+          ${memTot != null || diskTot != null ? `<div class="foot">${[memTot != null ? `${koGB(memTot)} RAM` : '', diskTot != null ? `${koGB(diskTot)} disk` : ''].filter(Boolean).join(' · ')}</div>` : ''}
+        </div>`;
+    }).join('');
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 14px; }
+        .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+        .hi { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; --mdc-icon-size: 24px; flex-shrink: 0; }
+        .ok .hi   { background: rgba(76,175,80,.15); color: var(--success-color,#4caf50); }
+        .warn .hi { background: rgba(255,152,0,.15); color: var(--warning-color,#ff9800); }
+        .crit .hi { background: rgba(244,67,54,.15); color: var(--error-color,#f44336); }
+        .ht { font-size: .78em; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--secondary-text-color); }
+        .hl { font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+        .srv { border-radius: 14px; padding: 12px; background: var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .sh { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: var(--success-color,#4caf50);
+               box-shadow: 0 0 0 3px rgba(76,175,80,.2); }
+        .s-down .dot { background: var(--error-color,#f44336); box-shadow: 0 0 0 3px rgba(244,67,54,.25); animation: blink 1.2s infinite; }
+        .s-disabled .dot, .s-unknown .dot { background: var(--disabled-text-color,#9e9e9e); box-shadow: none; }
+        @keyframes blink { 50% { opacity: .3; } }
+        .sn { flex: 1; min-width: 0; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .st { font-size: .72em; font-weight: 700; text-transform: uppercase; color: var(--error-color,#f44336); }
+        .s-disabled .st { color: var(--secondary-text-color); }
+        .al { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+        .al span { display: inline-flex; align-items: center; gap: 3px; font-size: .72em; font-weight: 600; padding: 2px 8px 2px 5px;
+                   border-radius: 10px; background: rgba(255,152,0,.15); color: var(--warning-color,#ff9800); --mdc-icon-size: 12px; }
+        .gs-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 10px; }
+        .g { position: relative; text-align: center; cursor: pointer; min-width: 0; }
+        .g svg { width: 100%; max-width: 64px; display: block; margin: 0 auto; transform: rotate(-90deg); }
+        .trk { fill: none; stroke: rgba(127,127,127,.22); stroke-width: 4; }
+        .val { fill: none; stroke-width: 4; stroke-linecap: round; transition: stroke-dashoffset .8s ease; }
+        .ok .val { stroke: var(--success-color,#4caf50); } .warn .val { stroke: var(--warning-color,#ff9800); }
+        .crit .val { stroke: var(--error-color,#f44336); } .na .val { stroke: transparent; }
+        .gv { position: absolute; left: 0; right: 0; top: 0; aspect-ratio: 1; max-width: 64px; margin: 0 auto;
+              display: flex; align-items: center; justify-content: center; font-size: .9em; font-weight: 700; color: var(--primary-text-color); }
+        .gv small { font-size: .65em; font-weight: 500; color: var(--secondary-text-color); }
+        .g.crit .gv { color: var(--error-color,#f44336); }
+        .gl { font-size: .7em; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color); margin-top: 2px; }
+        .gs { font-size: .68em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .g.crit .gs { color: var(--error-color,#f44336); }
+        .foot { margin-top: 8px; font-size: .72em; color: var(--secondary-text-color); text-align: center; }
+        .empty { font-size: .88em; color: var(--secondary-text-color); }
+      </style>
+      <ha-card>
+        <div class="head ${headTone}">
+          <div class="hi"><ha-icon icon="${headTone === 'ok' ? 'mdi:server' : 'mdi:server-network-off'}"></ha-icon></div>
+          <div><div class="ht">${koEsc(cfg.title || 'Komodo')} · ${servers.length} server${servers.length === 1 ? '' : 's'}</div><div class="hl">${summary}</div></div>
+        </div>
+        ${servers.length ? `<div class="grid">${cards}</div>` : `<div class="empty">No Komodo servers found — is the Komodo integration set up?</div>`}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  getCardSize() { return 5; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('komodo-card-editor');
+  }
+
+  static getStubConfig() { return { title: 'Komodo' }; }
+}
+
+customElements.define('komodo-card', KomodoCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'komodo-card',
+  name: 'Komodo Card',
+  description: 'Every Komodo server with status, alerts and CPU / memory / disk gauges.',
+  preview: false,
+});
+
+class KomodoCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:server', schema: [
+        f.text('title', 'Title'),
+        f.grid(
+          f.number('warn', 'Amber at', { min: 1, max: 100, unit: '%', helper: 'Default: 80' }),
+          f.number('critical', 'Red at', { min: 1, max: 100, unit: '%', helper: 'Default: 90' }),
+        ),
+        f.states('servers', 'Only show these servers', [], 'Leave empty for all. Order here sets the card order'),
+        f.states('exclude', 'Hide these servers', []),
+      ] },
+    ];
+  }
+}
+
+customElements.define('komodo-card-editor', KomodoCardEditor);
+})();
+
+// ═══ src/service-status-card.js ═══
+(() => {
+/**
+ * Service Status Card for Home Assistant
+ *
+ * A status page for everything you monitor. Uptime Kuma monitors are found
+ * automatically; UptimeRobot, Ping or any other up/down sensor can be added.
+ * Each row shows a status light, response time, a 24-hour history bar
+ * (from Home Assistant's own history), uptime and certificate expiry.
+ *
+ * Configuration:
+ *   type: custom:service-status-card
+ *   title: Services
+ *   hide_uptime_kuma: false      # Uptime Kuma monitors are included automatically
+ *   groups:                      # Optional: split monitors into groups (name match, partial)
+ *     - name: Self-hosted
+ *       monitors: [Home Assistant, My Website, Jellyfin, Jellyseerr]
+ *     - name: Internet
+ *       monitors: [Google, Amazon, Cloudflare, Microsoft, Oracle, Bell]
+ *   extra:                       # Other up/down sensors
+ *     - entity: binary_sensor.minecraftmap_russellcorbett_ca
+ *       name: Minecraft Map
+ *       group: Self-hosted
+ *   exclude: [Oracle Servers]
+ *   slow_ms: 1000                # Response time shown amber above this (default 1000)
+ *   cert_warn_days: 14           # Certificate expiry shown amber below this (default 14)
+ */
+
+const SS_BUCKETS = 48;           // 24 h in 30-minute slots
+const SS_RANK = { down: 3, pending: 2, maintenance: 1, up: 0 };
+
+const ssEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Normalise any monitor state to up / down / pending / maintenance / unknown.
+function ssNorm(state) {
+  const s = String(state ?? '').toLowerCase();
+  if (['up', 'on', 'online', 'ok', 'connected', 'home'].includes(s)) return 'up';
+  if (['down', 'off', 'offline', 'seems_down', 'problem', 'not_home'].includes(s)) return 'down';
+  if (['pending', 'not_checked_yet', 'started'].includes(s)) return 'pending';
+  if (['maintenance', 'pause', 'paused'].includes(s)) return 'maintenance';
+  return 'unknown';
+}
+
+class ServiceStatusCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._monitors = [];
+    this._watched = [];
+    this._history = {};
+    this._resolvedFor = null;
+    this.shadowRoot.addEventListener('click', (ev) => {
+      const el = ev.target.closest('[data-e]');
+      if (el) this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+    });
+  }
+
+  setConfig(config) {
+    this._config = config || {};
+    this._resolvedFor = null;
+    if (this._hass) { this._resolve(); this._fetchHistory(); }
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) { this._resolve(); this._fetchHistory(); }
+    else if (old && !this._watched.some((id) => hass.states[id] !== old.states[id])) return;
+    this._render();
+  }
+
+  connectedCallback() {
+    // History bars move on their own; refresh them every 10 minutes while visible.
+    this._timer = setInterval(() => { if (!document.hidden) this._fetchHistory(); }, 600000);
+  }
+
+  disconnectedCallback() { clearInterval(this._timer); }
+
+  _resolve() {
+    const hass = this._hass;
+    const cfg = this._config;
+    this._resolvedFor = hass.entities;
+    const monitors = [];
+
+    if (!cfg.hide_uptime_kuma && cfg.uptime_kuma !== false) {
+      const byDev = {};
+      for (const e of Object.values(hass.entities || {})) {
+        if (e.platform !== 'uptime_kuma' || !e.device_id || !e.entity_id.startsWith('sensor.')) continue;
+        const d = (byDev[e.device_id] ||= {});
+        const id = e.entity_id;
+        if (id.endsWith('_status')) d.status = id;
+        else if (id.endsWith('_response_time')) d.response = id;
+        else if (id.endsWith('_uptime_1_day')) d.up1 = id;
+        else if (id.endsWith('_uptime_30_days')) d.up30 = id;
+        else if (id.endsWith('_uptime_365_days')) d.up365 = id;
+        else if (id.endsWith('_certificate_expiry')) d.cert = id;
+        else if (id.endsWith('_monitored_url')) d.url = id;
+      }
+      for (const [devId, d] of Object.entries(byDev)) {
+        if (!d.status) continue;   // skips the Uptime Kuma server's own device
+        const dev = hass.devices?.[devId];
+        monitors.push({ ...d, name: dev?.name_by_user || dev?.name || d.status, group: null });
+      }
+    }
+    for (const x of cfg.extra || []) {
+      const ent = typeof x === 'string' ? { entity: x } : x;
+      if (!ent.entity) continue;
+      monitors.push({ status: ent.entity, name: ent.name || hass.states[ent.entity]?.attributes?.friendly_name || ent.entity,
+        group: ent.group || null, url: null, urlText: hass.states[ent.entity]?.attributes?.target });
+    }
+
+    const exclude = (cfg.exclude || []).map((s) => String(s).toLowerCase());
+    this._monitors = monitors.filter((m) => !exclude.some((x) => m.name.toLowerCase().includes(x)));
+    this._watched = this._monitors.flatMap((m) => [m.status, m.response, m.up1, m.cert]).filter(Boolean);
+  }
+
+  // Ask HA's recorder for the last 24 h of each status entity, then reduce
+  // it to 48 half-hour slots, each showing the worst state seen in it.
+  async _fetchHistory() {
+    if (!this._hass?.callWS || !this._monitors.length) return;
+    const end = new Date();
+    const start = new Date(end.getTime() - 24 * 3600 * 1000);
+    try {
+      const res = await this._hass.callWS({
+        type: 'history/history_during_period',
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        entity_ids: this._monitors.map((m) => m.status),
+        minimal_response: true,
+        no_attributes: true,
+        significant_changes_only: false,
+      });
+      const slot = (end - start) / SS_BUCKETS;
+      const history = {};
+      for (const [id, changes] of Object.entries(res || {})) {
+        const pts = changes.map((c) => ({ t: (c.lu ?? c.lc ?? 0) * 1000, s: ssNorm(c.s) })).sort((a, b) => a.t - b.t);
+        const buckets = [];
+        for (let i = 0; i < SS_BUCKETS; i++) {
+          const b0 = start.getTime() + i * slot, b1 = b0 + slot;
+          let worst = null;
+          const before = pts.filter((p) => p.t <= b0).pop();
+          const states = [before?.s, ...pts.filter((p) => p.t > b0 && p.t < b1).map((p) => p.s)].filter((s) => s && s !== 'unknown');
+          for (const s of states) if (worst == null || SS_RANK[s] > SS_RANK[worst]) worst = s;
+          buckets.push(worst || 'none');
+        }
+        history[id] = buckets;
+      }
+      this._history = history;
+      this._lastHtml = null;
+      this._render();
+    } catch (e) {
+      console.warn('service-status-card: history unavailable', e);
+    }
+  }
+
+  _num(id) {
+    const v = parseFloat(this._hass?.states[id]?.state);
+    return isNaN(v) ? null : v;
+  }
+
+  _row(m) {
+    const cfg = this._config;
+    const hass = this._hass;
+    const state = ssNorm(hass?.states[m.status]?.state);
+    const ms = this._num(m.response);
+    const up1 = this._num(m.up1), up30 = this._num(m.up30), up365 = this._num(m.up365);
+    const cert = this._num(m.cert);
+    const url = m.url ? hass.states[m.url]?.state : m.urlText;
+    const slow = ms != null && ms > (cfg.slow_ms ?? 1000);
+    const certWarn = cert != null && cert <= (cfg.cert_warn_days ?? 14);
+    const hist = this._history[m.status];
+    const label = { up: 'Up', down: 'Down', pending: 'Pending', maintenance: 'Paused', unknown: 'Unknown' }[state];
+    const uptimeTitle = [up1 != null && `24 h: ${up1.toFixed(2)}%`, up30 != null && `30 d: ${up30.toFixed(2)}%`, up365 != null && `1 y: ${up365.toFixed(2)}%`].filter(Boolean).join('  ·  ');
+
+    return `
+      <div class="row st-${state}">
+        <div class="name" data-e="${ssEsc(m.status)}" title="${ssEsc(url || '')}">
+          <span class="dot"></span>
+          <div class="nb"><div class="nm">${ssEsc(m.name)}</div>
+            <div class="sub">${state !== 'up' ? `<b>${label}</b>` : ''}${ms != null ? `<span class="${slow ? 'slow' : ''}">${ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : Math.round(ms) + ' ms'}</span>` : ''}${certWarn ? `<span class="cert">cert ${Math.round(cert)}d</span>` : ''}</div>
+          </div>
+        </div>
+        <div class="hist" title="Last 24 hours">${hist
+          ? hist.map((b) => `<i class="b-${b}"></i>`).join('')
+          : `<span class="nohist">${hass?.callWS ? '' : 'No history'}</span>`}</div>
+        <div class="up" title="${ssEsc(uptimeTitle)}" ${m.up1 ? `data-e="${ssEsc(m.up1)}"` : ''}>${up1 != null ? `${up1 >= 99.95 ? '100' : up1.toFixed(1)}%` : ''}</div>
+      </div>`;
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    const hass = this._hass;
+    const mons = this._monitors;
+
+    // Assign groups: explicit monitor.group, else the first config group whose list matches the name.
+    const groupsCfg = cfg.groups || [];
+    const grouped = new Map(groupsCfg.map((g) => [g.name, []]));
+    const other = [];
+    for (const m of mons) {
+      let g = m.group;
+      if (!g) {
+        const hit = groupsCfg.find((gc) => (gc.monitors || []).some((x) => m.name.toLowerCase().includes(String(x).toLowerCase())));
+        g = hit?.name;
+      }
+      if (g && grouped.has(g)) grouped.get(g).push(m);
+      else if (g) grouped.set(g, [m]);
+      else other.push(m);
+    }
+    if (other.length) grouped.set(groupsCfg.length ? 'Other' : '', other);
+
+    const states = mons.map((m) => ssNorm(hass?.states[m.status]?.state));
+    const down = mons.filter((m, i) => states[i] === 'down');
+    const tone = down.length ? 'crit' : states.some((s) => s === 'pending' || s === 'unknown') ? 'warn' : 'ok';
+    const headline = down.length
+      ? `${down.length === 1 ? down[0].name + ' is' : down.length + ' services are'} down`
+      : tone === 'warn' ? 'Some checks pending' : 'All systems operational';
+    const times = mons.map((m) => this._num(m.response)).filter((v) => v != null);
+    // Median, so one very slow monitor doesn't distort the headline number.
+    const sorted = [...times].sort((a, b) => a - b);
+    const avg = sorted.length ? (sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2) : null;
+
+    const order = (list) => [...list].sort((a, b) => (ssNorm(hass?.states[b.status]?.state) === 'down') - (ssNorm(hass?.states[a.status]?.state) === 'down'));
+    const body = [...grouped.entries()].filter(([, list]) => list.length).map(([name, list]) => `
+      ${name ? `<div class="gt">${ssEsc(name)}<span>${list.filter((m) => ssNorm(hass?.states[m.status]?.state) === 'up').length}/${list.length}</span></div>` : ''}
+      <div class="rows">${order(list).map((m) => this._row(m)).join('')}</div>`).join('');
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 14px; }
+        .head { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; margin-bottom: 10px; }
+        .head.ok   { background: rgba(76,175,80,.13); }
+        .head.warn { background: rgba(255,152,0,.13); }
+        .head.crit { background: rgba(244,67,54,.15); }
+        .head ha-icon { --mdc-icon-size: 28px; flex-shrink: 0; }
+        .ok ha-icon { color: var(--success-color,#4caf50); } .warn ha-icon { color: var(--warning-color,#ff9800); } .crit ha-icon { color: var(--error-color,#f44336); }
+        .hb { flex: 1; min-width: 0; }
+        .ht { font-size: .75em; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--secondary-text-color); }
+        .hl { font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); }
+        .avg { text-align: right; font-size: .75em; color: var(--secondary-text-color); white-space: nowrap; }
+        .avg b { display: block; font-size: 1.3em; color: var(--primary-text-color); }
+
+        .gt { display: flex; justify-content: space-between; font-size: .75em; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+              color: var(--secondary-text-color); margin: 12px 2px 4px; }
+        .rows { display: flex; flex-direction: column; }
+        .row { display: grid; grid-template-columns: minmax(110px, 38%) 1fr 44px; align-items: center; gap: 10px; padding: 7px 2px;
+               border-bottom: 1px solid var(--divider-color, rgba(127,127,127,.12)); }
+        .row:last-child { border-bottom: none; }
+        .name { display: flex; align-items: center; gap: 9px; min-width: 0; cursor: pointer; }
+        .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--success-color,#4caf50); }
+        .st-down .dot { background: var(--error-color,#f44336); box-shadow: 0 0 0 3px rgba(244,67,54,.25); animation: blink 1.2s infinite; }
+        .st-pending .dot, .st-unknown .dot { background: var(--warning-color,#ff9800); }
+        .st-maintenance .dot { background: var(--info-color,#2196f3); }
+        @keyframes blink { 50% { opacity: .35; } }
+        .nb { min-width: 0; }
+        .nm { font-size: .9em; font-weight: 500; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .st-down .nm { color: var(--error-color,#f44336); font-weight: 600; }
+        .sub { display: flex; gap: 6px; font-size: .72em; color: var(--secondary-text-color); white-space: nowrap; }
+        .sub b { color: var(--error-color,#f44336); }
+        .st-maintenance .sub b, .st-pending .sub b { color: var(--warning-color,#ff9800); }
+        .slow { color: var(--warning-color,#ff9800); font-weight: 600; }
+        .cert { color: var(--warning-color,#ff9800); }
+        .hist { display: flex; gap: 2px; height: 20px; align-items: stretch; min-width: 0; }
+        .hist i { flex: 1; min-width: 1px; border-radius: 2px; background: rgba(127,127,127,.18); }
+        .hist .b-up { background: var(--success-color,#4caf50); opacity: .8; }
+        .hist .b-down { background: var(--error-color,#f44336); }
+        .hist .b-pending { background: var(--warning-color,#ff9800); }
+        .hist .b-maintenance { background: var(--info-color,#2196f3); opacity: .7; }
+        .nohist { font-size: .72em; color: var(--secondary-text-color); align-self: center; }
+        .up { text-align: right; font-size: .82em; font-weight: 600; color: var(--primary-text-color); font-variant-numeric: tabular-nums; cursor: pointer; }
+        @media (max-width: 420px) { .row { grid-template-columns: minmax(96px, 42%) 1fr 40px; gap: 8px; } .hist { gap: 1px; } }
+      </style>
+      <ha-card>
+        <div class="head ${tone}">
+          <ha-icon icon="${tone === 'ok' ? 'mdi:check-circle' : tone === 'warn' ? 'mdi:progress-clock' : 'mdi:alert-circle'}"></ha-icon>
+          <div class="hb"><div class="ht">${ssEsc(cfg.title || 'Services')}</div><div class="hl">${ssEsc(headline)}</div></div>
+          ${avg != null ? `<div class="avg"><b>${avg >= 1000 ? (avg / 1000).toFixed(1) + ' s' : Math.round(avg) + ' ms'}</b>typical response</div>` : ''}
+        </div>
+        ${mons.length ? body : `<div class="gt">No monitors found — set up Uptime Kuma or add sensors under "extra".</div>`}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  getCardSize() { return 6; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('service-status-card-editor');
+  }
+
+  static getStubConfig() { return { title: 'Services' }; }
+}
+
+customElements.define('service-status-card', ServiceStatusCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'service-status-card',
+  name: 'Service Status Card',
+  description: 'Status page for Uptime Kuma and other monitors, with 24-hour history bars.',
+  preview: false,
+});
+
+class ServiceStatusCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:list-status', schema: [
+        f.text('title', 'Title'),
+        f.toggle('hide_uptime_kuma', 'Skip Uptime Kuma monitors', 'Uptime Kuma monitors are included automatically'),
+        f.grid(
+          f.number('slow_ms', 'Slow above', { min: 50, unit: 'ms', helper: 'Default: 1000' }),
+          f.number('cert_warn_days', 'Certificate warning under', { min: 1, unit: 'days', helper: 'Default: 14' }),
+        ),
+        f.states('exclude', 'Hide monitors', [], 'Part of a monitor name'),
+      ] },
+      { title: 'Groups', icon: 'mdi:format-list-group', open: false, list: {
+        key: 'groups',
+        schema: [f.text('name', 'Group name'), f.states('monitors', 'Monitors in this group', [], 'Part of each monitor name')],
+        label: (g, i) => g.name || `Group ${i + 1}`,
+        newItem: () => ({ name: '' }),
+        addLabel: 'Add group',
+      } },
+      { title: 'Other monitors', icon: 'mdi:plus-network', open: false, list: {
+        key: 'extra',
+        schema: [f.entity('entity', 'Up/down sensor', 'e.g. an UptimeRobot or Ping sensor'), f.grid(f.text('name', 'Name'), f.text('group', 'Group'))],
+        label: (x, i) => x.name || x.entity || `Monitor ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add monitor',
+      } },
+    ];
+  }
+}
+
+customElements.define('service-status-card-editor', ServiceStatusCardEditor);
+})();
+
+// ═══ src/ha-health-card.js ═══
+(() => {
+/**
+ * Home Assistant Health Card
+ *
+ * One checklist for the state of Home Assistant itself: backups, updates,
+ * repairs (Spook), missing entities (Watchman) and system load. Healthy items
+ * collapse to a tick; problems expand to show what needs doing. Everything is
+ * found automatically — set an entity only to override it.
+ *
+ * Configuration:
+ *   type: custom:ha-health-card
+ *   title: Home Assistant
+ *   backup_max_age: 26            # Hours before the last backup counts as stale (default 26)
+ *   hide_system: false            # Hide the CPU / memory / disk / uptime row
+ *   # Optional overrides (auto-detected when left out):
+ *   cpu_entity: sensor.processor_use
+ *   memory_entity: sensor.memory_use_percent
+ *   disk_entity: sensor.disk_use_percent
+ *   uptime_entity: sensor.uptime
+ *   repairs_entity: sensor.active_issues
+ *   watchman_entity: sensor.watchman_missing_entities
+ */
+
+const HH_DEFAULTS = {
+  cpu_entity: ['sensor.processor_use', 'sensor.system_monitor_processor_use', 'sensor.processor_use_percent'],
+  memory_entity: ['sensor.memory_use_percent', 'sensor.system_monitor_memory_usage'],
+  disk_entity: ['sensor.disk_use_percent', 'sensor.disk_use_percent_config', 'sensor.disk_use_percent_home', 'sensor.system_monitor_disk_usage'],
+  uptime_entity: ['sensor.uptime', 'sensor.last_boot', 'sensor.system_monitor_last_boot'],
+  repairs_entity: ['sensor.active_issues'],
+  ignored_entity: ['sensor.ignored_issues'],
+  watchman_entity: ['sensor.watchman_missing_entities'],
+  watchman_actions_entity: ['sensor.watchman_missing_actions'],
+  backup_last_entity: ['sensor.backup_last_successful_automatic_backup'],
+  backup_attempt_entity: ['sensor.backup_last_attempted_automatic_backup'],
+  backup_next_entity: ['sensor.backup_next_scheduled_automatic_backup'],
+  backup_size_entity: ['sensor.backup_last_successful_automatic_backup_size'],
+  backup_state_entity: ['sensor.backup_backup_manager_state'],
+  core_update_entity: ['update.home_assistant_core_update'],
+};
+
+const hhEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function hhRel(d, future) {
+  if (!d || isNaN(d)) return '';
+  const m = Math.abs(d - Date.now()) / 60000;
+  const t = m < 60 ? `${Math.round(m)}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+  return future ? `in ${t}` : `${t} ago`;
+}
+
+class HaHealthCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._open = new Set();
+    this._ids = {};
+    this._updates = [];
+    this._watched = [];
+    this._resolvedFor = null;
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    this._config = config || {};
+    this._resolvedFor = null;
+    if (this._hass) this._resolve();
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) this._resolve();
+    else if (old && !this._watched.some((id) => hass.states[id] !== old.states[id])) return;
+    this._render();
+  }
+
+  connectedCallback() { this._clock = setInterval(() => { if (!document.hidden) this._render(); }, 60000); }
+  disconnectedCallback() { clearInterval(this._clock); }
+
+  _resolve() {
+    const hass = this._hass;
+    this._resolvedFor = hass.entities;
+    const ids = {};
+    for (const [key, candidates] of Object.entries(HH_DEFAULTS)) {
+      ids[key] = this._config[key] || candidates.find((id) => hass.states[id]);
+    }
+    this._ids = ids;
+    this._updates = Object.keys(hass.states).filter((id) => id.startsWith('update.'));
+    this._watched = [...Object.values(ids).filter(Boolean), ...this._updates];
+  }
+
+  _st(key) {
+    const id = this._ids[key];
+    const s = id && this._hass?.states[id];
+    return s && !['unavailable', 'unknown'].includes(s.state) ? s : null;
+  }
+
+  _num(key) {
+    const v = parseFloat(this._st(key)?.state);
+    return isNaN(v) ? null : v;
+  }
+
+  // One checklist row. `items` (HTML) shows when the row is expanded.
+  _item(key, tone, icon, label, value, items, link) {
+    const open = items && this._open.has(key);
+    return `
+      <div class="item t-${tone} ${items ? 'exp' : ''}">
+        <div class="ih" ${items ? `data-act="toggle" data-k="${key}"` : link ? `data-act="nav" data-p="${hhEsc(link)}"` : ''}>
+          <div class="ic"><ha-icon icon="${tone === 'ok' ? 'mdi:check-circle' : tone === 'warn' ? 'mdi:alert-circle' : tone === 'crit' ? 'mdi:close-circle' : icon}"></ha-icon></div>
+          <div class="il"><div class="in">${label}</div><div class="iv">${value}</div></div>
+          ${items ? `<ha-icon class="chev ${open ? 'up' : ''}" icon="mdi:chevron-down"></ha-icon>` : link ? '<ha-icon class="chev" icon="mdi:chevron-right"></ha-icon>' : ''}
+        </div>
+        ${open ? `<div class="ib">${items}</div>` : ''}
+      </div>`;
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    const hass = this._hass;
+    const rows = [];
+    const issues = [];
+
+    // ── Backups ──────────────────────────────────────────────────────────────
+    const last = this._st('backup_last_entity');
+    if (last || this._st('backup_attempt_entity')) {
+      const lastD = last ? new Date(last.state) : null;
+      const attempt = this._st('backup_attempt_entity') ? new Date(this._st('backup_attempt_entity').state) : null;
+      const next = this._st('backup_next_entity') ? new Date(this._st('backup_next_entity').state) : null;
+      const size = this._num('backup_size_entity');
+      const running = (this._st('backup_state_entity')?.state || 'idle') !== 'idle';
+      const failed = attempt && (!lastD || attempt - lastD > 3600000);
+      const ageH = lastD ? (Date.now() - lastD) / 3600000 : Infinity;
+      const stale = ageH > (cfg.backup_max_age ?? 26);
+      const tone = failed ? 'crit' : stale ? 'warn' : 'ok';
+      if (failed) issues.push('backup failed'); else if (stale) issues.push('backup is old');
+      const bits = [
+        running ? 'Backing up now…' : failed ? `Last attempt failed ${hhRel(attempt)}` : lastD ? `Last backup ${hhRel(lastD)}` : 'No backup yet',
+        size != null ? `${size >= 1024 ? (size / 1024).toFixed(1) + ' GB' : Math.round(size) + ' MB'}` : '',
+        next && next > Date.now() ? `next ${hhRel(next, true)}` : '',
+      ].filter(Boolean).join(' · ');
+      rows.push(this._item('backup', running ? 'run' : tone, 'mdi:backup-restore', 'Backups', hhEsc(bits), null, '/config/backup'));
+    }
+
+    // ── Updates ──────────────────────────────────────────────────────────────
+    const pending = this._updates.map((id) => hass?.states[id]).filter((s) => s && s.state === 'on');
+    if (this._updates.length) {
+      const coreId = this._ids.core_update_entity;
+      pending.sort((a, b) => (b.entity_id === coreId) - (a.entity_id === coreId));
+      if (pending.length) issues.push(`${pending.length} update${pending.length > 1 ? 's' : ''}`);
+      const list = pending.map((s) => `
+        <div class="li" data-act="more" data-e="${hhEsc(s.entity_id)}">
+          <ha-icon icon="mdi:package-up"></ha-icon>
+          <span class="ln">${hhEsc(s.attributes.title || s.attributes.friendly_name || s.entity_id)}</span>
+          <span class="lv">${hhEsc(s.attributes.installed_version || '?')} → <b>${hhEsc(s.attributes.latest_version || '?')}</b></span>
+        </div>`).join('');
+      rows.push(this._item('updates', pending.length ? 'warn' : 'ok', 'mdi:update', 'Updates',
+        pending.length ? `${pending.length} available` : `All ${this._updates.length} up to date`,
+        pending.length ? `${list}<div class="link" data-act="nav" data-p="/config/updates">Open updates</div>` : null));
+    }
+
+    // ── Repairs (Spook) ──────────────────────────────────────────────────────
+    const rep = this._num('repairs_entity');
+    if (rep != null) {
+      const ign = this._num('ignored_entity');
+      if (rep > 0) issues.push(`${rep} repair${rep > 1 ? 's' : ''}`);
+      rows.push(this._item('repairs', rep > 0 ? 'warn' : 'ok', 'mdi:wrench', 'Repairs',
+        `${rep > 0 ? `${rep} open` : 'Nothing to fix'}${ign ? ` · ${ign} ignored` : ''}`, null, '/config/repairs'));
+    }
+
+    // ── Watchman ─────────────────────────────────────────────────────────────
+    const wm = this._st('watchman_entity');
+    if (wm) {
+      const n = parseFloat(wm.state) || 0;
+      const acts = this._num('watchman_actions_entity') || 0;
+      const missing = Array.isArray(wm.attributes.entities) ? wm.attributes.entities : [];
+      if (n + acts > 0) issues.push(`${n + acts} missing`);
+      const list = missing.slice(0, 15).map((e) => {
+        const where = String(e.occurrences || '').split('\n')[0].replace(/^\.storage\//, '').replace(/:\d+$/, '');
+        return `<div class="li" ${hass?.states[e.id] ? `data-act="more" data-e="${hhEsc(e.id)}"` : ''}>
+          <ha-icon icon="${e.state === 'missing' ? 'mdi:help-circle-outline' : 'mdi:lan-disconnect'}"></ha-icon>
+          <span class="ln">${hhEsc(e.friendly_name || e.id)}<small>${hhEsc(e.id)}</small></span>
+          <span class="lv"><span class="tag">${hhEsc(e.state)}</span>${where ? `<small>${hhEsc(where)}</small>` : ''}</span>
+        </div>`;
+      }).join('');
+      const more = missing.length > 15 ? `<div class="muted">…and ${missing.length - 15} more</div>` : '';
+      rows.push(this._item('watchman', n + acts > 0 ? 'warn' : 'ok', 'mdi:binoculars', 'Missing entities',
+        n + acts > 0 ? `${n} entit${n === 1 ? 'y' : 'ies'}${acts ? ` · ${acts} action${acts > 1 ? 's' : ''}` : ''}` : 'None referenced',
+        n + acts > 0 ? `${list}${more}<div class="link" data-act="rescan">Rescan now</div>` : null));
+    }
+
+    // ── System ───────────────────────────────────────────────────────────────
+    const sys = [];
+    if (!cfg.hide_system) {
+      for (const [key, label] of [['cpu_entity', 'CPU'], ['memory_entity', 'Memory'], ['disk_entity', 'Disk']]) {
+        const v = this._num(key);
+        if (v == null) continue;
+        const tone = v >= 90 ? 'crit' : v >= 75 ? 'warn' : 'ok';
+        if (key === 'disk_entity' && v >= 90) issues.push('disk almost full');
+        sys.push(`<div class="sy" data-act="more" data-e="${hhEsc(this._ids[key])}">
+          <div class="sv s-${tone}">${Math.round(v)}<small>%</small></div><div class="sl">${label}</div>
+          <div class="sb"><div style="width:${Math.min(100, v)}%"></div></div></div>`);
+      }
+      const up = this._st('uptime_entity');
+      if (up) {
+        const d = new Date(up.state);
+        const txt = isNaN(d) ? up.state : hhRel(d).replace(' ago', '');
+        sys.push(`<div class="sy" data-act="more" data-e="${hhEsc(this._ids.uptime_entity)}"><div class="sv">${hhEsc(txt)}</div><div class="sl">Uptime</div></div>`);
+      }
+    }
+
+    const core = this._st('core_update_entity');
+    const version = core?.attributes?.installed_version;
+    const tone = rows.some((r) => r.includes('t-crit')) ? 'crit' : issues.length ? 'warn' : 'ok';
+    const headline = issues.length ? issues.join(' · ').replace(/^\w/, (c) => c.toUpperCase()) : 'Everything healthy';
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 14px; }
+        .head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+        .logo { width: 42px; height: 42px; border-radius: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+                --mdc-icon-size: 26px; background: rgba(3,169,244,.14); color: var(--primary-color,#03a9f4); }
+        .h-warn .logo { background: rgba(255,152,0,.15); color: var(--warning-color,#ff9800); }
+        .h-crit .logo { background: rgba(244,67,54,.15); color: var(--error-color,#f44336); }
+        .hb { flex: 1; min-width: 0; }
+        .ht { font-size: .75em; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--secondary-text-color); }
+        .hl { font-size: 1.02em; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .sys { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 8px; margin-bottom: 10px; }
+        .sy { border-radius: 10px; padding: 8px 6px 7px; text-align: center; cursor: pointer; background: var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .sv { font-size: 1.05em; font-weight: 700; color: var(--primary-text-color); white-space: nowrap; }
+        .sv small { font-size: .65em; font-weight: 500; color: var(--secondary-text-color); }
+        .sv.s-warn { color: var(--warning-color,#ff9800); } .sv.s-crit { color: var(--error-color,#f44336); }
+        .sl { font-size: .66em; text-transform: uppercase; letter-spacing: .05em; color: var(--secondary-text-color); }
+        .sb { height: 3px; border-radius: 2px; background: rgba(127,127,127,.2); margin: 5px 4px 0; overflow: hidden; }
+        .sb div { height: 100%; background: var(--primary-color,#03a9f4); }
+
+        .list { display: flex; flex-direction: column; gap: 6px; }
+        .item { border-radius: 12px; background: var(--secondary-background-color, rgba(127,127,127,.08)); overflow: hidden; }
+        .ih { display: flex; align-items: center; gap: 10px; padding: 9px 10px; }
+        .ih[data-act] { cursor: pointer; }
+        .ic { --mdc-icon-size: 22px; line-height: 0; color: var(--secondary-text-color); }
+        .t-ok .ic { color: var(--success-color,#4caf50); } .t-warn .ic { color: var(--warning-color,#ff9800); }
+        .t-crit .ic { color: var(--error-color,#f44336); } .t-run .ic { color: var(--primary-color,#03a9f4); animation: spin 2s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .il { flex: 1; min-width: 0; }
+        .in { font-size: .9em; font-weight: 600; color: var(--primary-text-color); }
+        .iv { font-size: .78em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .t-warn .iv, .t-crit .iv { color: var(--primary-text-color); }
+        .chev { color: var(--secondary-text-color); --mdc-icon-size: 20px; transition: transform .2s; }
+        .chev.up { transform: rotate(180deg); }
+        .ib { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 2px; }
+        .li { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-top: 1px solid var(--divider-color, rgba(127,127,127,.15));
+              font-size: .8em; color: var(--primary-text-color); --mdc-icon-size: 16px; }
+        .li[data-act] { cursor: pointer; }
+        .li ha-icon { color: var(--secondary-text-color); flex-shrink: 0; }
+        .ln { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ln small, .lv small { display: block; font-size: .85em; color: var(--secondary-text-color); font-family: monospace; overflow: hidden; text-overflow: ellipsis; }
+        .lv { text-align: right; flex-shrink: 0; max-width: 45%; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .lv b { color: var(--primary-color,#03a9f4); }
+        .tag { font-size: .85em; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: rgba(255,152,0,.15); color: var(--warning-color,#ff9800); }
+        .link { margin-top: 6px; padding: 7px; text-align: center; border-radius: 8px; cursor: pointer; font-size: .8em; font-weight: 600;
+                color: var(--primary-color,#03a9f4); background: rgba(3,169,244,.08); }
+        .link:hover { background: rgba(3,169,244,.16); }
+        .muted { font-size: .75em; color: var(--secondary-text-color); padding: 4px; }
+      </style>
+      <ha-card>
+        <div class="head h-${tone}">
+          <div class="logo"><ha-icon icon="mdi:home-assistant"></ha-icon></div>
+          <div class="hb"><div class="ht">${hhEsc(cfg.title || 'Home Assistant')}${version ? ` · ${hhEsc(version)}` : ''}</div>
+            <div class="hl" title="${hhEsc(headline)}">${hhEsc(headline)}</div></div>
+        </div>
+        ${sys.length ? `<div class="sys">${sys.join('')}</div>` : ''}
+        <div class="list">${rows.join('')}</div>
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    if (!el || !this._hass) return;
+    const act = el.dataset.act;
+    if (act === 'toggle') {
+      const k = el.dataset.k;
+      if (this._open.has(k)) this._open.delete(k); else this._open.add(k);
+      this._render();
+    } else if (act === 'more') {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+    } else if (act === 'nav') {
+      history.pushState(null, '', el.dataset.p);
+      window.dispatchEvent(new CustomEvent('location-changed', { detail: { replace: false } }));
+    } else if (act === 'rescan') {
+      this._hass.callService('watchman', 'report', { parse_config: true, create_file: false });
+      el.textContent = 'Scanning…';
+    }
+  }
+
+  getCardSize() { return 5; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('ha-health-card-editor');
+  }
+
+  static getStubConfig() { return { title: 'Home Assistant' }; }
+}
+
+customElements.define('ha-health-card', HaHealthCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'ha-health-card',
+  name: 'Home Assistant Health Card',
+  description: 'Backups, updates, repairs, missing entities and system load as one checklist.',
+  preview: false,
+});
+
+class HaHealthCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:home-assistant', schema: [
+        f.text('title', 'Title'),
+        f.grid(
+          f.number('backup_max_age', 'Backup is stale after', { min: 1, unit: 'h', helper: 'Default: 26' }),
+          f.toggle('hide_system', 'Hide CPU / memory / disk row'),
+        ),
+      ] },
+      { title: 'Entity overrides', icon: 'mdi:swap-horizontal', open: false, schema: [
+        f.grid(f.entity('cpu_entity', 'CPU %', 'Auto-detected', 'sensor'), f.entity('memory_entity', 'Memory %', undefined, 'sensor')),
+        f.grid(f.entity('disk_entity', 'Disk %', undefined, 'sensor'), f.entity('uptime_entity', 'Uptime / last boot', undefined, 'sensor')),
+        f.grid(f.entity('repairs_entity', 'Repairs count', 'Spook', 'sensor'), f.entity('watchman_entity', 'Missing entities', 'Watchman', 'sensor')),
+        f.entity('backup_last_entity', 'Last successful backup', undefined, 'sensor'),
+      ] },
+    ];
+  }
+}
+
+customElements.define('ha-health-card-editor', HaHealthCardEditor);
+})();
+
+console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer · Media · Security · Parcels · Flights · EV · Batteries · Komodo · Services · HA Health ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');
