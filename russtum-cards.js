@@ -383,6 +383,8 @@
   RusstumEditor.f = {
     text:   (name, label, helper) => ({ name, label, helper, selector: { text: {} } }),
     entity: (name, label, helper, domain) => ({ name, label, helper, selector: { entity: domain ? { domain } : {} } }),
+    // Several entities in one picker (stored as an array of entity IDs).
+    entities: (name, label, helper, domain) => ({ name, label, helper, selector: { entity: { multiple: true, ...(domain ? { domain } : {}) } } }),
     icon:   (name, label = 'Icon', helper) => ({ name, label, helper, selector: { icon: {} } }),
     number: (name, label, { min, max, step, unit, helper } = {}) => ({
       name, label, helper,
@@ -4674,4 +4676,1777 @@ class PrinterCardEditor extends window.RusstumEditor {
 customElements.define('printer-card-editor', PrinterCardEditor);
 })();
 
-console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');
+// ═══ src/active-media-card.js ═══
+(() => {
+/**
+ * Active Media Card for Home Assistant
+ *
+ * Give it every media player in the house; it shows only the ones that are
+ * actually doing something, with artwork, progress and controls. When
+ * nothing is playing it collapses to a one-line "Nothing playing" (or hides).
+ *
+ * Configuration:
+ *   type: custom:active-media-card
+ *   title: Now Playing                  # Optional
+ *   hide_when_empty: false              # Hide the whole card when nothing is active
+ *   hide_volume: false                  # Hide the volume -/+ buttons
+ *   players:
+ *     - entity: media_player.family_room_apple_tv
+ *       name: Family Room                # Optional (defaults to friendly name)
+ *       icon: mdi:cast-variant           # Optional
+ *       hide_paused: false               # Treat "paused" as inactive for this player
+ *       hide_when_active:                # Hide this player while any of these are on
+ *         - media_player.russell_bedroom_tv
+ *         - media_player.xboxone
+ */
+
+const AM_INACTIVE = ['off', 'standby', 'idle', 'unavailable', 'unknown'];
+// MediaPlayerEntityFeature bits
+const AM_F = { PAUSE: 1, VOLUME_SET: 4, PREV: 16, NEXT: 32, TURN_OFF: 256, VOLUME_STEP: 1024, STOP: 4096, PLAY: 16384 };
+
+const amEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const amTime = (sec) => {
+  if (sec == null || isNaN(sec)) return '';
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+};
+
+class ActiveMediaCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._config = null;
+    this._hass = null;
+    this._watched = [];
+    this._ticker = null;
+    // One delegated listener survives every re-render.
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error('Invalid configuration');
+    const players = (config.players || []).map((p) => (typeof p === 'string' ? { entity: p } : p)).filter((p) => p.entity);
+    this._config = { ...config, players };
+    this._watched = [...new Set(players.flatMap((p) => [p.entity, ...(p.hide_when_active || [])]))];
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (old && !this._watched.some((id) => hass.states[id] !== old.states[id])) return;
+    this._render();
+  }
+
+  connectedCallback() {
+    // Move progress bars every second without rebuilding the card (keeps artwork from flickering).
+    this._ticker = setInterval(() => this._tick(), 1000);
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._ticker);
+    this._ticker = null;
+  }
+
+  _isActive(p) {
+    const st = this._hass?.states[p.entity];
+    if (!st || AM_INACTIVE.includes(st.state)) return false;
+    if (p.hide_paused && st.state === 'paused') return false;
+    const blockers = p.hide_when_active || [];
+    if (blockers.some((id) => {
+      const s = this._hass.states[id]?.state;
+      return s && !['off', 'standby', 'unavailable', 'unknown', 'idle'].includes(s);
+    })) return false;
+    return true;
+  }
+
+  _position(st) {
+    const a = st.attributes;
+    if (a.media_duration == null || a.media_position == null) return null;
+    let pos = a.media_position;
+    if (st.state === 'playing' && a.media_position_updated_at) {
+      pos += (Date.now() - new Date(a.media_position_updated_at).getTime()) / 1000;
+    }
+    return { pos: Math.min(pos, a.media_duration), dur: a.media_duration };
+  }
+
+  _tick() {
+    if (!this._hass || !this.shadowRoot) return;
+    for (const el of this.shadowRoot.querySelectorAll('.item[data-playing]')) {
+      const st = this._hass.states[el.dataset.e];
+      const p = st && this._position(st);
+      if (!p) continue;
+      const fill = el.querySelector('.fill');
+      const t = el.querySelector('.ptime');
+      if (fill) fill.style.width = `${(p.pos / p.dur) * 100}%`;
+      if (t) t.textContent = `${amTime(p.pos)} / ${amTime(p.dur)}`;
+    }
+  }
+
+  _art(st) {
+    const pic = st.attributes.entity_picture_local || st.attributes.entity_picture;
+    if (!pic) return null;
+    return this._hass.hassUrl && pic.startsWith('/') ? this._hass.hassUrl(pic) : pic;
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    const active = this._hass ? cfg.players.filter((p) => this._isActive(p)) : [];
+    const empty = !active.length;
+
+    this.style.display = empty && cfg.hide_when_empty ? 'none' : '';
+
+    const items = active.map((p) => {
+      const st = this._hass.states[p.entity];
+      const a = st.attributes;
+      const f = a.supported_features || 0;
+      const playing = st.state === 'playing';
+      const room = p.name || a.friendly_name || p.entity;
+      const title = a.media_title || a.app_name || a.source || (st.state === 'on' ? 'On' : st.state);
+      const sub = [a.media_artist || a.media_series_title, a.media_album_name].filter(Boolean).join(' · ')
+        || (a.media_title && a.app_name ? a.app_name : '');
+      const art = this._art(st);
+      const pos = this._position(st);
+      const vol = a.volume_level != null ? Math.round(a.volume_level * 100) : null;
+      const canPause = f & AM_F.PAUSE || f & AM_F.PLAY;
+      const canVol = !cfg.hide_volume && (f & AM_F.VOLUME_STEP || f & AM_F.VOLUME_SET);
+
+      return `
+        <div class="item ${art ? 'has-art' : ''}" data-e="${amEsc(p.entity)}" ${playing && pos ? 'data-playing' : ''}>
+          ${art ? `<div class="bg" style="background-image:url('${amEsc(art)}')"></div>` : ''}
+          <div class="row">
+            <div class="art" data-act="more">
+              ${art ? `<img src="${amEsc(art)}" alt="" loading="lazy">` : `<ha-icon icon="${amEsc(p.icon || 'mdi:cast-variant')}"></ha-icon>`}
+              ${playing ? '<div class="eq"><i></i><i></i><i></i></div>' : ''}
+            </div>
+            <div class="meta" data-act="more">
+              <div class="room"><ha-icon icon="${amEsc(p.icon || 'mdi:speaker')}"></ha-icon>${amEsc(room)}${a.app_name && a.media_title ? ` · ${amEsc(a.app_name)}` : ''}</div>
+              <div class="ttl">${amEsc(title)}</div>
+              ${sub ? `<div class="sub">${amEsc(sub)}</div>` : ''}
+            </div>
+            <div class="ctl">
+              ${f & AM_F.PREV ? `<button data-act="prev" title="Previous"><ha-icon icon="mdi:skip-previous"></ha-icon></button>` : ''}
+              ${canPause ? `<button class="main" data-act="playpause" title="${playing ? 'Pause' : 'Play'}"><ha-icon icon="${playing ? 'mdi:pause' : 'mdi:play'}"></ha-icon></button>` : ''}
+              ${f & AM_F.NEXT ? `<button data-act="next" title="Next"><ha-icon icon="mdi:skip-next"></ha-icon></button>` : ''}
+            </div>
+          </div>
+          ${pos || canVol ? `
+          <div class="foot">
+            ${pos ? `<div class="prog"><div class="fill" style="width:${(pos.pos / pos.dur) * 100}%"></div></div>
+                     <span class="ptime">${amTime(pos.pos)} / ${amTime(pos.dur)}</span>` : '<span class="grow"></span>'}
+            ${canVol ? `
+              <div class="vol">
+                <button data-act="vol-" title="Volume down"><ha-icon icon="mdi:volume-minus"></ha-icon></button>
+                <span>${vol != null ? vol + '%' : ''}</span>
+                <button data-act="vol+" title="Volume up"><ha-icon icon="mdi:volume-plus"></ha-icon></button>
+              </div>` : ''}
+          </div>` : ''}
+        </div>`;
+    }).join('');
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: ${empty ? '12px 16px' : '14px'}; overflow: hidden; }
+        .title { font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); margin: 0 2px 10px; display: flex; align-items: center; gap: 8px; }
+        .count { font-size: .75em; font-weight: 600; padding: 1px 8px; border-radius: 10px;
+                 background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .list { display: flex; flex-direction: column; gap: 10px; }
+        .empty { display: flex; align-items: center; gap: 10px; color: var(--secondary-text-color); font-size: .9em; --mdc-icon-size: 20px; }
+
+        .item { position: relative; border-radius: 14px; overflow: hidden; padding: 10px;
+                background: var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .bg { position: absolute; inset: -20px; background-size: cover; background-position: center;
+              filter: blur(24px) saturate(1.4); opacity: .35; }
+        .row, .foot { position: relative; display: flex; align-items: center; gap: 12px; }
+        .art { position: relative; width: 56px; height: 56px; flex-shrink: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
+               background: rgba(127,127,127,.18); display: flex; align-items: center; justify-content: center;
+               color: var(--secondary-text-color); --mdc-icon-size: 28px; }
+        .art img { width: 100%; height: 100%; object-fit: cover; }
+        .eq { position: absolute; right: 4px; bottom: 4px; display: flex; gap: 2px; align-items: flex-end; height: 12px;
+              padding: 2px 3px; border-radius: 4px; background: rgba(0,0,0,.55); }
+        .eq i { width: 3px; background: #fff; border-radius: 1px; animation: eq 1s ease-in-out infinite; }
+        .eq i:nth-child(2) { animation-delay: -.4s; } .eq i:nth-child(3) { animation-delay: -.7s; }
+        @keyframes eq { 0%, 100% { height: 3px; } 50% { height: 10px; } }
+
+        .meta { flex: 1; min-width: 0; cursor: pointer; }
+        .room { display: flex; align-items: center; gap: 4px; font-size: .72em; font-weight: 600; text-transform: uppercase;
+                letter-spacing: .05em; color: var(--secondary-text-color); --mdc-icon-size: 13px;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ttl { font-size: .98em; font-weight: 600; color: var(--primary-text-color); margin-top: 2px;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sub { font-size: .82em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        button { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 50%; line-height: 0;
+                 color: var(--primary-text-color); --mdc-icon-size: 22px; }
+        button:hover { background: rgba(127,127,127,.18); }
+        .ctl { display: flex; align-items: center; flex-shrink: 0; }
+        .ctl .main { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); --mdc-icon-size: 24px; margin: 0 2px; }
+        .ctl .main:hover { filter: brightness(1.1); background: var(--primary-color, #03a9f4); }
+
+        .foot { margin-top: 8px; gap: 8px; }
+        .grow { flex: 1; }
+        .prog { flex: 1; height: 4px; border-radius: 2px; background: rgba(127,127,127,.3); overflow: hidden; }
+        .fill { height: 100%; background: var(--primary-color, #03a9f4); border-radius: 2px; transition: width 1s linear; }
+        .ptime { font-size: .72em; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .vol { display: flex; align-items: center; gap: 2px; font-size: .78em; color: var(--secondary-text-color); }
+        .vol button { --mdc-icon-size: 18px; padding: 4px; }
+        .vol span { min-width: 32px; text-align: center; font-variant-numeric: tabular-nums; }
+      </style>
+      <ha-card>
+        ${cfg.title && !empty ? `<div class="title">${amEsc(cfg.title)}<span class="count">${active.length}</span></div>` : ''}
+        ${empty
+          ? `<div class="empty"><ha-icon icon="mdi:speaker-off"></ha-icon>${amEsc(cfg.empty_text || 'Nothing playing')}</div>`
+          : `<div class="list">${items}</div>`}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    const item = ev.target.closest('.item');
+    if (!el || !item || !this._hass) return;
+    const entity_id = item.dataset.e;
+    const act = el.dataset.act;
+    const call = (service, data = {}) => this._hass.callService('media_player', service, { entity_id, ...data });
+    const vol = this._hass.states[entity_id]?.attributes?.volume_level;
+    const f = this._hass.states[entity_id]?.attributes?.supported_features || 0;
+    switch (act) {
+      case 'more':
+        this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: entity_id }, bubbles: true, composed: true }));
+        break;
+      case 'playpause': call('media_play_pause'); break;
+      case 'prev': call('media_previous_track'); break;
+      case 'next': call('media_next_track'); break;
+      case 'vol+':
+      case 'vol-':
+        if (f & AM_F.VOLUME_SET && vol != null) {
+          call('volume_set', { volume_level: Math.max(0, Math.min(1, Math.round((vol + (act === 'vol+' ? 0.05 : -0.05)) * 100) / 100)) });
+        } else {
+          call(act === 'vol+' ? 'volume_up' : 'volume_down');
+        }
+        break;
+    }
+  }
+
+  getCardSize() { return 3; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('active-media-card-editor');
+  }
+
+  static getStubConfig(hass) {
+    const players = Object.keys(hass?.states || {}).filter((id) => id.startsWith('media_player.')).slice(0, 6).map((entity) => ({ entity }));
+    return { title: 'Now Playing', players };
+  }
+}
+
+customElements.define('active-media-card', ActiveMediaCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'active-media-card',
+  name: 'Active Media Card',
+  description: 'Shows only the media players that are playing, with artwork and controls.',
+  preview: false,
+});
+
+class ActiveMediaCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:play-circle-outline', schema: [
+        f.text('title', 'Title'),
+        f.text('empty_text', 'Text when nothing is playing', 'Default: Nothing playing'),
+        f.grid(f.toggle('hide_when_empty', 'Hide card when nothing plays'), f.toggle('hide_volume', 'Hide volume buttons')),
+      ] },
+      { title: 'Players', icon: 'mdi:speaker-multiple', list: {
+        key: 'players',
+        collapsible: true,
+        schema: [
+          f.entity('entity', 'Media player', undefined, 'media_player'),
+          f.grid(f.text('name', 'Name'), f.icon('icon')),
+          f.toggle('hide_paused', 'Hide while paused'),
+          f.entities('hide_when_active', 'Hide while any of these are on', 'e.g. hide the soundbar when the TV or Xbox is on'),
+        ],
+        label: (p, i) => p.name || p.entity || `Player ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add player',
+      } },
+    ];
+  }
+}
+
+customElements.define('active-media-card-editor', ActiveMediaCardEditor);
+})();
+
+// ═══ src/security-card.js ═══
+(() => {
+/**
+ * Security Overview Card for Home Assistant
+ *
+ * One card for the whole house: alarm state, locks, doors and windows,
+ * motion (tiles glow and fade with how recently they saw something) and
+ * leak sensors. A Batteries tab shows the battery of every sensor listed,
+ * found automatically from each sensor's device.
+ *
+ * Configuration:
+ *   type: custom:security-card
+ *   title: Security
+ *   alarm_entity: alarm_control_panel.alarmo   # Optional
+ *   locks: [lock.front_door]                   # Optional
+ *   sensors:                                   # Grouped by device class automatically
+ *     - entity: binary_sensor.konnected_front_door_zone_1
+ *       name: Front Door
+ *     - entity: binary_sensor.kitchen_motion
+ *       name: Kitchen
+ *   compact: false        # Only show what needs attention (for the Home page)
+ *   recent_minutes: 5     # Motion this recent counts as "active" in compact mode (default 5)
+ *   battery_low: 20       # Battery % shown as low (default 20)
+ */
+
+const SC_GROUPS = [
+  { key: 'openings', title: 'Doors & windows', icon: 'mdi:door', classes: ['door', 'window', 'garage_door', 'opening'] },
+  { key: 'motion',   title: 'Motion',          icon: 'mdi:motion-sensor', classes: ['motion', 'occupancy', 'presence', 'moving'] },
+  { key: 'leaks',    title: 'Leaks',           icon: 'mdi:water', classes: ['moisture'] },
+  { key: 'safety',   title: 'Safety',          icon: 'mdi:smoke-detector', classes: ['smoke', 'gas', 'carbon_monoxide', 'heat', 'tamper', 'safety', 'problem'] },
+  { key: 'other',    title: 'Other',           icon: 'mdi:shield-outline', classes: [] },
+];
+
+const SC_ICONS = {
+  door: ['mdi:door-open', 'mdi:door-closed'],
+  window: ['mdi:window-open-variant', 'mdi:window-closed-variant'],
+  garage_door: ['mdi:garage-open', 'mdi:garage'],
+  opening: ['mdi:square-rounded-outline', 'mdi:square-rounded'],
+  motion: ['mdi:motion-sensor', 'mdi:motion-sensor-off'],
+  occupancy: ['mdi:home-account', 'mdi:home-outline'],
+  presence: ['mdi:home-account', 'mdi:home-outline'],
+  moisture: ['mdi:water-alert', 'mdi:water-outline'],
+  smoke: ['mdi:smoke-detector-alert', 'mdi:smoke-detector'],
+};
+
+const SC_ALARM = {
+  disarmed:           { label: 'Disarmed',     icon: 'mdi:shield-off-outline', tone: 'muted' },
+  armed_home:         { label: 'Armed home',   icon: 'mdi:shield-home',        tone: 'ok' },
+  armed_away:         { label: 'Armed away',   icon: 'mdi:shield-lock',        tone: 'ok' },
+  armed_night:        { label: 'Armed night',  icon: 'mdi:shield-moon',        tone: 'ok' },
+  armed_vacation:     { label: 'Armed vacation', icon: 'mdi:shield-airplane',  tone: 'ok' },
+  armed_custom_bypass:{ label: 'Armed',        icon: 'mdi:shield-check',       tone: 'ok' },
+  arming:             { label: 'Arming…',      icon: 'mdi:shield-sync',        tone: 'warn' },
+  pending:            { label: 'Pending',      icon: 'mdi:shield-alert',       tone: 'warn' },
+  disarming:          { label: 'Disarming…',   icon: 'mdi:shield-sync',        tone: 'warn' },
+  triggered:          { label: 'TRIGGERED',    icon: 'mdi:alarm-light',        tone: 'error' },
+};
+
+const scEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const scMins = (ts) => (Date.now() - new Date(ts).getTime()) / 60000;
+const scAgo = (ts) => {
+  const m = scMins(ts);
+  if (isNaN(m)) return '';
+  if (m < 1) return 'now';
+  if (m < 60) return `${Math.round(m)}m`;
+  if (m < 1440) return `${Math.round(m / 60)}h`;
+  return `${Math.round(m / 1440)}d`;
+};
+
+class SecurityCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._config = null;
+    this._hass = null;
+    this._tab = 'activity';
+    this._batteries = {};
+    this._resolvedFor = null;
+    this._clock = null;
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error('Invalid configuration');
+    const sensors = (config.sensors || []).map((s) => (typeof s === 'string' ? { entity: s } : s)).filter((s) => s.entity);
+    this._config = { ...config, sensors, locks: config.locks || [] };
+    this._watchedBase = [config.alarm_entity, ...this._config.locks, ...sensors.map((s) => s.entity)].filter(Boolean);
+    this._watched = this._watchedBase;
+    this._resolvedFor = null;
+    if (this._hass) this._resolveBatteries();
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) this._resolveBatteries();
+    else if (old && !this._watched.some((id) => hass.states[id] !== old.states[id])) return;
+    this._render();
+  }
+
+  // "Last seen 4m ago" ages on its own, so refresh every 30 s.
+  connectedCallback() { this._clock = setInterval(() => { if (!document.hidden) this._render(); }, 30000); }
+  disconnectedCallback() { clearInterval(this._clock); this._clock = null; }
+
+  // Each sensor's battery lives on the same device; find it in the registry.
+  _resolveBatteries() {
+    const hass = this._hass;
+    this._resolvedFor = hass.entities;
+    const ids = [...this._config.locks, ...this._config.sensors.map((s) => s.entity)];
+    const batteries = {};
+    const all = Object.values(hass.entities || {});
+    for (const id of ids) {
+      const dev = hass.entities?.[id]?.device_id;
+      if (!dev) continue;
+      const candidates = all.filter((e) => e.device_id === dev && e.entity_id.startsWith('sensor.')
+        && hass.states[e.entity_id]?.attributes?.device_class === 'battery');
+      const pick = candidates.find((e) => e.entity_id.endsWith('_battery_plus')) || candidates[0];
+      if (pick) batteries[id] = pick.entity_id;
+    }
+    this._batteries = batteries;
+    this._watched = [...this._watchedBase, ...Object.values(batteries)];
+  }
+
+  _group(dc) {
+    return SC_GROUPS.find((g) => g.classes.includes(dc)) || SC_GROUPS[SC_GROUPS.length - 1];
+  }
+
+  _name(s) {
+    return s.name || this._hass.states[s.entity]?.attributes?.friendly_name || s.entity;
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    const hass = this._hass;
+    const recent = cfg.recent_minutes ?? 5;
+    const batLow = cfg.battery_low ?? 20;
+
+    // ── Collect states ───────────────────────────────────────────────────────
+    const groups = Object.fromEntries(SC_GROUPS.map((g) => [g.key, []]));
+    for (const s of cfg.sensors) {
+      const st = hass?.states[s.entity];
+      const dc = st?.attributes?.device_class;
+      const g = this._group(dc);
+      const unavailable = !st || st.state === 'unavailable' || st.state === 'unknown';
+      const on = st?.state === 'on';
+      const mins = st ? scMins(st.last_changed) : Infinity;
+      groups[g.key].push({ ...s, name: this._name(s), st, dc, on, unavailable, mins, group: g.key });
+    }
+    const locks = cfg.locks.map((id) => {
+      const st = hass?.states[id];
+      return { entity: id, name: st?.attributes?.friendly_name || id, st, unlocked: st?.state === 'unlocked' || st?.state === 'open',
+               jammed: st?.state === 'jammed', unavailable: !st || st.state === 'unavailable' };
+    });
+
+    const open = groups.openings.filter((x) => x.on);
+    const motionNow = groups.motion.filter((x) => x.on || (!x.unavailable && x.mins <= recent));
+    const wet = [...groups.leaks, ...groups.safety].filter((x) => x.on);
+    const unlocked = locks.filter((l) => l.unlocked || l.jammed);
+    const offline = [...Object.values(groups).flat(), ...locks].filter((x) => x.unavailable);
+
+    // ── Header summary ───────────────────────────────────────────────────────
+    const alarmSt = cfg.alarm_entity && hass?.states[cfg.alarm_entity]?.state;
+    const alarm = alarmSt ? (SC_ALARM[alarmSt] || { label: alarmSt, icon: 'mdi:shield', tone: 'muted' }) : null;
+    const issues = [];
+    if (wet.length) issues.push(`${wet.map((x) => x.name).join(', ')} alert`);
+    if (open.length) issues.push(`${open.length} open`);
+    if (unlocked.length) issues.push(`${unlocked.length} unlocked`);
+    if (motionNow.length) issues.push(`motion in ${motionNow.slice(0, 2).map((x) => x.name).join(', ')}${motionNow.length > 2 ? ` +${motionNow.length - 2}` : ''}`);
+    const headTone = wet.length || alarmSt === 'triggered' ? 'error' : open.length || unlocked.length ? 'warn' : 'ok';
+    const headline = issues.length ? issues.join(' · ') : 'All secure';
+    const headline2 = headline.charAt(0).toUpperCase() + headline.slice(1);
+
+    // ── Tiles ────────────────────────────────────────────────────────────────
+    const tile = (x) => {
+      const icons = SC_ICONS[x.dc] || ['mdi:checkbox-blank-circle', 'mdi:checkbox-blank-circle-outline'];
+      let cls = '', label = '';
+      if (x.unavailable) { cls = 'off'; label = 'Offline'; }
+      else if (x.group === 'motion') {
+        const m = x.mins;
+        cls = x.on ? 'heat-4' : m <= 5 ? 'heat-3' : m <= 30 ? 'heat-2' : m <= 120 ? 'heat-1' : '';
+        label = x.on ? 'Now' : scAgo(x.st.last_changed);
+      } else if (x.group === 'openings') {
+        cls = x.on ? 'warn' : '';
+        label = x.on ? `Open · ${scAgo(x.st.last_changed)}` : 'Closed';
+      } else {
+        cls = x.on ? 'error' : '';
+        label = x.on ? 'ALERT' : 'OK';
+      }
+      return `
+        <div class="tile ${cls}" data-act="more" data-e="${scEsc(x.entity)}" title="${scEsc(x.name)}">
+          <ha-icon icon="${x.unavailable ? 'mdi:help-circle-outline' : x.on ? icons[0] : icons[1]}"></ha-icon>
+          <div class="tn">${scEsc(x.name)}</div>
+          <div class="tl">${scEsc(label)}</div>
+        </div>`;
+    };
+    const lockTile = (l) => `
+      <div class="tile ${l.unavailable ? 'off' : l.jammed ? 'error' : l.unlocked ? 'warn' : 'ok'}" data-act="more" data-e="${scEsc(l.entity)}">
+        <ha-icon icon="${l.jammed ? 'mdi:lock-alert' : l.unlocked ? 'mdi:lock-open-variant' : 'mdi:lock'}"></ha-icon>
+        <div class="tn">${scEsc(l.name)}</div>
+        <div class="tl">${l.unavailable ? 'Offline' : l.jammed ? 'Jammed' : l.unlocked ? 'Unlocked' : 'Locked'}</div>
+      </div>`;
+
+    let body = '';
+    if (cfg.compact) {
+      const active = [...wet, ...unlocked.map((l) => ({ ...l, lock: true })), ...open, ...motionNow,
+        ...offline];
+      const seen = new Set();
+      const uniq = active.filter((x) => !seen.has(x.entity) && seen.add(x.entity));
+      body = uniq.length ? `<div class="grid">${uniq.map((x) => (x.lock || x.entity.startsWith('lock.') ? lockTile(x) : tile(x))).join('')}</div>` : '';
+    } else if (this._tab === 'batteries') {
+      const rows = [...locks.map((l) => ({ entity: l.entity, name: l.name })), ...cfg.sensors.map((s) => ({ entity: s.entity, name: this._name(s) }))]
+        .map((x) => {
+          const bid = this._batteries[x.entity];
+          const v = bid ? parseFloat(hass.states[bid]?.state) : NaN;
+          return { ...x, bid, pct: isNaN(v) ? null : v };
+        })
+        .filter((x) => x.bid)
+        .sort((a, b) => (a.pct ?? 999) - (b.pct ?? 999));
+      body = rows.length ? `<div class="bats">${rows.map((r) => {
+        const color = r.pct == null ? 'var(--disabled-text-color,#9e9e9e)' : r.pct <= batLow / 2 ? 'var(--error-color,#f44336)'
+          : r.pct <= batLow ? 'var(--warning-color,#ff9800)' : 'var(--success-color,#4caf50)';
+        return `<div class="bat" data-act="more" data-e="${scEsc(r.bid)}">
+          <span class="bn">${scEsc(r.name)}</span>
+          <div class="bar"><div class="bf" style="width:${r.pct ?? 0}%;background:${color}"></div></div>
+          <span class="bv" style="${r.pct != null && r.pct <= batLow ? `color:${color}` : ''}">${r.pct == null ? '—' : Math.round(r.pct) + '%'}</span>
+        </div>`;
+      }).join('')}</div>` : `<div class="none">None of these sensors report a battery.</div>`;
+    } else {
+      const sections = [];
+      if (locks.length) sections.push(['Locks', 'mdi:lock', locks.map(lockTile).join('')]);
+      for (const g of SC_GROUPS) {
+        const list = groups[g.key];
+        if (!list.length) continue;
+        if (g.key === 'motion') list.sort((a, b) => (b.on - a.on) || (a.mins - b.mins));
+        if (g.key === 'openings') list.sort((a, b) => b.on - a.on);
+        sections.push([g.title, g.icon, list.map(tile).join('')]);
+      }
+      body = sections.map(([t, i, tiles]) => `
+        <div class="sec"><div class="st"><ha-icon icon="${i}"></ha-icon>${t}</div><div class="grid">${tiles}</div></div>`).join('');
+    }
+
+    const hasBatteries = Object.keys(this._batteries).length > 0;
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 14px; }
+        .head { display: flex; align-items: center; gap: 12px; }
+        .hi { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+              --mdc-icon-size: 26px; }
+        .tone-ok .hi    { background: rgba(76,175,80,.15);  color: var(--success-color,#4caf50); }
+        .tone-warn .hi  { background: rgba(255,152,0,.15);  color: var(--warning-color,#ff9800); }
+        .tone-error .hi { background: rgba(244,67,54,.18);  color: var(--error-color,#f44336); animation: throb 1.2s infinite; }
+        @keyframes throb { 50% { background: rgba(244,67,54,.4); } }
+        .hb { flex: 1; min-width: 0; }
+        .ht { font-size: .78em; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--secondary-text-color); }
+        .hl { font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .alarm { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px 5px 8px; border-radius: 16px; cursor: pointer;
+                 font-size: .8em; font-weight: 600; white-space: nowrap; --mdc-icon-size: 16px; flex-shrink: 0; }
+        .alarm.muted { background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .alarm.ok    { background: rgba(76,175,80,.15); color: var(--success-color,#4caf50); }
+        .alarm.warn  { background: rgba(255,152,0,.15); color: var(--warning-color,#ff9800); }
+        .alarm.error { background: var(--error-color,#f44336); color: #fff; }
+
+        .tabs { display: flex; gap: 4px; margin: 12px 0 2px; padding: 3px; border-radius: 10px; background: var(--secondary-background-color); }
+        .tab { flex: 1; border: none; background: none; padding: 6px; border-radius: 8px; cursor: pointer; font: inherit; font-size: .85em;
+               font-weight: 500; color: var(--secondary-text-color); }
+        .tab.on { background: var(--card-background-color, #fff); color: var(--primary-text-color); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+
+        .sec { margin-top: 14px; }
+        .st { display: flex; align-items: center; gap: 6px; font-size: .75em; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+              color: var(--secondary-text-color); margin-bottom: 8px; --mdc-icon-size: 15px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+        .head + .grid { margin-top: 12px; }
+        .tile { position: relative; padding: 10px 8px 8px; border-radius: 12px; cursor: pointer; text-align: center; min-width: 0;
+                background: var(--secondary-background-color, rgba(127,127,127,.08)); color: var(--secondary-text-color);
+                transition: background .4s, box-shadow .4s; --mdc-icon-size: 24px; }
+        .tile .tn { font-size: .8em; font-weight: 500; color: var(--primary-text-color); margin-top: 4px;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .tile .tl { font-size: .72em; margin-top: 1px; }
+        .tile.ok ha-icon { color: var(--success-color,#4caf50); }
+        .tile.warn  { background: rgba(255,152,0,.16); color: var(--warning-color,#ff9800); }
+        .tile.error { background: rgba(244,67,54,.2);  color: var(--error-color,#f44336); }
+        .tile.off   { opacity: .5; }
+        /* motion heat: glows when active, fades over two hours */
+        .tile.heat-4 { background: rgba(3,169,244,.32); color: var(--primary-color,#03a9f4); box-shadow: 0 0 0 2px var(--primary-color,#03a9f4) inset; }
+        .tile.heat-3 { background: rgba(3,169,244,.24); color: var(--primary-color,#03a9f4); }
+        .tile.heat-2 { background: rgba(3,169,244,.14); color: var(--primary-color,#03a9f4); }
+        .tile.heat-1 { background: rgba(3,169,244,.07); }
+
+        .bats { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+        .bat { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .bn { width: 42%; font-size: .85em; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--divider-color, rgba(127,127,127,.2)); overflow: hidden; }
+        .bf { height: 100%; border-radius: 3px; }
+        .bv { width: 38px; text-align: right; font-size: .85em; font-weight: 600; color: var(--primary-text-color); }
+        .none { margin-top: 12px; font-size: .85em; color: var(--secondary-text-color); }
+      </style>
+      <ha-card>
+        <div class="head tone-${headTone}">
+          <div class="hi"><ha-icon icon="${headTone === 'ok' ? 'mdi:shield-check' : headTone === 'warn' ? 'mdi:shield-alert' : 'mdi:shield-alert'}"></ha-icon></div>
+          <div class="hb">
+            <div class="ht">${scEsc(cfg.title || 'Security')}</div>
+            <div class="hl" title="${scEsc(headline2)}">${scEsc(headline2)}</div>
+          </div>
+          ${alarm ? `<div class="alarm ${alarm.tone}" data-act="more" data-e="${scEsc(cfg.alarm_entity)}"><ha-icon icon="${alarm.icon}"></ha-icon>${scEsc(alarm.label)}</div>` : ''}
+        </div>
+        ${!cfg.compact && hasBatteries ? `
+          <div class="tabs">
+            <button class="tab ${this._tab === 'activity' ? 'on' : ''}" data-act="tab" data-t="activity">Activity</button>
+            <button class="tab ${this._tab === 'batteries' ? 'on' : ''}" data-act="tab" data-t="batteries">Batteries</button>
+          </div>` : ''}
+        ${body}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    if (!el) return;
+    if (el.dataset.act === 'tab') { this._tab = el.dataset.t; this._render(); return; }
+    if (el.dataset.act === 'more') {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+    }
+  }
+
+  getCardSize() { return this._config?.compact ? 2 : 6; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('security-card-editor');
+  }
+
+  static getStubConfig(hass) {
+    const sensors = Object.entries(hass?.states || {})
+      .filter(([id, s]) => id.startsWith('binary_sensor.') && ['door', 'window', 'motion', 'moisture'].includes(s.attributes.device_class))
+      .slice(0, 8).map(([entity]) => ({ entity }));
+    return { title: 'Security', sensors };
+  }
+}
+
+customElements.define('security-card', SecurityCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'security-card',
+  name: 'Security Overview Card',
+  description: 'Alarm, locks, doors, motion and leaks in one card, with sensor batteries.',
+  preview: false,
+});
+
+class SecurityCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:shield-home', schema: [
+        f.text('title', 'Title'),
+        f.entity('alarm_entity', 'Alarm panel', undefined, 'alarm_control_panel'),
+        f.entities('locks', 'Locks', undefined, 'lock'),
+      ] },
+      { title: 'Display', icon: 'mdi:tune-vertical', open: false, schema: [
+        f.toggle('compact', 'Compact', 'Only show what needs attention — good for the Home page'),
+        f.grid(
+          f.number('recent_minutes', 'Motion counts as recent for', { min: 1, max: 120, unit: 'min', helper: 'Compact mode. Default: 5' }),
+          f.number('battery_low', 'Battery low at', { min: 1, max: 100, unit: '%', helper: 'Default: 20' }),
+        ),
+      ] },
+      { title: 'Sensors', icon: 'mdi:motion-sensor', list: {
+        key: 'sensors',
+        schema: [f.grid(f.entity('entity', 'Sensor', undefined, 'binary_sensor'), f.text('name', 'Name'))],
+        label: (s, i) => s.name || s.entity || `Sensor ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add sensor',
+      } },
+    ];
+  }
+}
+
+customElements.define('security-card-editor', SecurityCardEditor);
+})();
+
+// ═══ src/parcel-card.js ═══
+(() => {
+/**
+ * Parcel Card for Home Assistant (Parcel app integration)
+ *
+ * Every package on its way, each with a carrier badge, a four-step progress
+ * track (ordered → in transit → out for delivery → delivered), the latest
+ * scan, and the expected delivery day. Tap a package to see its full history.
+ *
+ * Configuration:
+ *   type: custom:parcel-card
+ *   entity: sensor.parcel_raw_shipment_data   # sensor with a "deliveries" attribute
+ *   title: Packages
+ *   show_delivered: false     # Also list delivered packages
+ *   max_items: 10
+ *   hide_when_empty: false
+ */
+
+// Parcel API status codes
+const PA_STATUS = {
+  0: { label: 'Delivered',        step: 3, tone: 'ok',    icon: 'mdi:package-variant-closed-check' },
+  1: { label: 'No recent updates', step: 1, tone: 'muted', icon: 'mdi:package-variant-closed' },
+  2: { label: 'In transit',       step: 1, tone: 'info',  icon: 'mdi:truck-fast-outline' },
+  3: { label: 'Ready for pickup', step: 2, tone: 'warn',  icon: 'mdi:store-marker-outline' },
+  4: { label: 'Out for delivery', step: 2, tone: 'info',  icon: 'mdi:truck-delivery-outline' },
+  5: { label: 'Not found',        step: 0, tone: 'error', icon: 'mdi:package-variant-remove' },
+  6: { label: 'Delivery attempt failed', step: 2, tone: 'error', icon: 'mdi:home-alert-outline' },
+  7: { label: 'Exception',        step: 1, tone: 'error', icon: 'mdi:alert-circle-outline' },
+  8: { label: 'Label created',    step: 0, tone: 'muted', icon: 'mdi:label-outline' },
+};
+const PA_STEPS = ['Ordered', 'In transit', 'Out for delivery', 'Delivered'];
+const PA_CARRIERS = {
+  ups: 'UPS', fedex: 'FedEx', usps: 'USPS', dhl: 'DHL', cp: 'Canada Post', pur: 'Purolator', purolator: 'Purolator',
+  amzl: 'Amazon', amzlca: 'Amazon', amzluk: 'Amazon', canpar: 'Canpar', icl: 'Intelcom', intelcom: 'Intelcom',
+  dicom: 'Dicom', gls: 'GLS', ontrac: 'OnTrac', lasership: 'LaserShip', apple: 'Apple', uniuni: 'UniUni', pholder: 'Manual',
+};
+
+const paEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function paDay(d) {
+  if (!d || isNaN(d)) return '';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const that = new Date(d); that.setHours(0, 0, 0, 0);
+  const diff = Math.round((that - today) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  if (diff > 1 && diff < 7) return that.toLocaleDateString(undefined, { weekday: 'long' });
+  return that.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function paParseDate(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return new Date(v < 1e12 ? v * 1000 : v);
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
+
+class ParcelCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._open = new Set();
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    if (!config?.entity) throw new Error('Set "entity" to the Parcel sensor that has a deliveries attribute');
+    this._config = config;
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (old && old.states[this._config.entity] === hass.states[this._config.entity]) return;
+    this._render();
+  }
+
+  _deliveries() {
+    const st = this._hass?.states[this._config.entity];
+    const list = st?.attributes?.[this._config.attribute || 'deliveries'];
+    return Array.isArray(list) ? list : [];
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    let list = this._deliveries();
+    if (!cfg.show_delivered) list = list.filter((d) => Number(d.status_code) !== 0);
+    // Out for delivery first, then by expected date.
+    const order = { 4: 0, 6: 1, 3: 2, 7: 3, 2: 4, 8: 5, 1: 6, 5: 7, 0: 8 };
+    list = [...list].sort((a, b) => (order[a.status_code] ?? 9) - (order[b.status_code] ?? 9)
+      || (paParseDate(a.timestamp_expected ?? a.date_expected) || Infinity) - (paParseDate(b.timestamp_expected ?? b.date_expected) || Infinity));
+    list = list.slice(0, cfg.max_items ?? 10);
+
+    const empty = !list.length;
+    this.style.display = empty && cfg.hide_when_empty ? 'none' : '';
+    const outToday = list.filter((d) => Number(d.status_code) === 4).length;
+
+    const rows = list.map((d) => {
+      const code = Number(d.status_code);
+      const s = PA_STATUS[code] || { label: 'Unknown', step: 1, tone: 'muted', icon: 'mdi:package-variant' };
+      const id = d.tracking_number || d.description;
+      const open = this._open.has(id);
+      const carrier = PA_CARRIERS[(d.carrier_code || '').toLowerCase()] || (d.carrier_code || '').toUpperCase();
+      const events = Array.isArray(d.events) ? d.events : [];
+      const latest = events[0];
+      const exp = paParseDate(d.timestamp_expected ?? d.date_expected);
+      const expEnd = paParseDate(d.timestamp_expected_end ?? d.date_expected_end);
+      const expText = code === 0 ? '' : exp ? `Arrives ${paDay(exp)}${expEnd && paDay(expEnd) !== paDay(exp) ? `–${paDay(expEnd)}` : ''}` : '';
+      const latestDate = latest && paParseDate(latest.date);
+
+      return `
+        <div class="pkg ${s.tone}" data-act="toggle" data-id="${paEsc(id)}">
+          <div class="top">
+            <div class="pi"><ha-icon icon="${s.icon}"></ha-icon></div>
+            <div class="pb">
+              <div class="pn">${paEsc(d.description || d.tracking_number || 'Package')}</div>
+              <div class="pm"><span class="carrier">${paEsc(carrier)}</span><span class="pill">${s.label}</span>${expText ? `<span class="exp">${paEsc(expText)}</span>` : ''}</div>
+            </div>
+            <ha-icon class="chev ${open ? 'up' : ''}" icon="mdi:chevron-down"></ha-icon>
+          </div>
+          <div class="track">
+            ${PA_STEPS.map((label, i) => `<div class="step ${i <= s.step ? 'done' : ''} ${i === s.step ? 'cur' : ''}" title="${label}"></div>`).join('')}
+          </div>
+          ${latest ? `<div class="last"><ha-icon icon="mdi:map-marker-outline"></ha-icon>
+            <span>${paEsc(latest.event)}${latest.location ? ` · ${paEsc(latest.location)}` : ''}</span>
+            <span class="when">${latestDate ? paEsc(paDay(latestDate)) : paEsc(latest.date || '')}</span></div>` : ''}
+          ${open ? `
+            <div class="more">
+              ${d.tracking_number ? `<div class="tn"><span>${paEsc(d.tracking_number)}</span>
+                <button data-act="copy" data-v="${paEsc(d.tracking_number)}" title="Copy tracking number"><ha-icon icon="mdi:content-copy"></ha-icon></button></div>` : ''}
+              ${d.extra_information ? `<div class="extra">${paEsc(d.extra_information)}</div>` : ''}
+              <div class="events">${events.slice(0, 8).map((e) => `
+                <div class="ev"><div class="dot"></div><div><div>${paEsc(e.event)}</div>
+                <div class="evm">${paEsc([e.location, e.date].filter(Boolean).join(' · '))}</div></div></div>`).join('') || '<div class="evm">No tracking events yet</div>'}
+              </div>
+            </div>` : ''}
+        </div>`;
+    }).join('');
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: ${empty ? '12px 16px' : '14px'}; }
+        .head { display: flex; align-items: center; gap: 8px; margin: 0 2px 10px; }
+        .title { flex: 1; font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); }
+        .badge { font-size: .75em; font-weight: 600; padding: 2px 9px; border-radius: 10px; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .badge.hot { background: rgba(3,169,244,.16); color: var(--primary-color,#03a9f4); }
+        .empty { display: flex; align-items: center; gap: 10px; color: var(--secondary-text-color); font-size: .9em; --mdc-icon-size: 20px; }
+        .list { display: flex; flex-direction: column; gap: 8px; }
+
+        .pkg { border-radius: 12px; padding: 10px 12px; cursor: pointer; background: var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .top { display: flex; align-items: center; gap: 10px; }
+        .pi { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; --mdc-icon-size: 22px;
+              background: rgba(127,127,127,.15); color: var(--secondary-text-color); }
+        .info .pi { background: rgba(3,169,244,.16); color: var(--primary-color,#03a9f4); }
+        .ok .pi   { background: rgba(76,175,80,.16); color: var(--success-color,#4caf50); }
+        .warn .pi { background: rgba(255,152,0,.16); color: var(--warning-color,#ff9800); }
+        .error .pi{ background: rgba(244,67,54,.16); color: var(--error-color,#f44336); }
+        .pb { flex: 1; min-width: 0; }
+        .pn { font-size: .95em; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pm { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px; font-size: .75em; color: var(--secondary-text-color); }
+        .carrier { font-weight: 700; letter-spacing: .02em; }
+        .pill { font-weight: 600; }
+        .info .pill { color: var(--primary-color,#03a9f4); } .ok .pill { color: var(--success-color,#4caf50); }
+        .warn .pill { color: var(--warning-color,#ff9800); } .error .pill { color: var(--error-color,#f44336); }
+        .exp::before { content: '·'; margin-right: 6px; }
+        .chev { color: var(--secondary-text-color); transition: transform .2s; --mdc-icon-size: 20px; }
+        .chev.up { transform: rotate(180deg); }
+
+        .track { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 10px 0 6px; }
+        .step { height: 4px; border-radius: 2px; background: rgba(127,127,127,.25); }
+        .step.done { background: var(--primary-color,#03a9f4); }
+        .ok .step.done { background: var(--success-color,#4caf50); }
+        .error .step.cur { background: var(--error-color,#f44336); }
+        .info .step.cur { animation: pulse 1.6s ease-in-out infinite; }
+        @keyframes pulse { 50% { opacity: .4; } }
+
+        .last { display: flex; align-items: center; gap: 5px; font-size: .78em; color: var(--secondary-text-color); --mdc-icon-size: 14px; }
+        .last span:first-of-type { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .when { flex-shrink: 0; }
+
+        .more { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--divider-color, rgba(127,127,127,.2)); cursor: default; }
+        .tn { display: flex; align-items: center; gap: 6px; font-family: monospace; font-size: .85em; color: var(--primary-text-color); }
+        .tn button { background: none; border: none; cursor: pointer; padding: 4px; border-radius: 50%; color: var(--secondary-text-color); line-height: 0; --mdc-icon-size: 16px; }
+        .tn button:hover { background: rgba(127,127,127,.2); }
+        .extra { font-size: .78em; color: var(--secondary-text-color); margin-top: 4px; }
+        .events { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; font-size: .8em; color: var(--primary-text-color); }
+        .ev { display: flex; gap: 10px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; background: rgba(127,127,127,.5); }
+        .ev:first-child .dot { background: var(--primary-color,#03a9f4); }
+        .evm { color: var(--secondary-text-color); font-size: .92em; }
+      </style>
+      <ha-card>
+        ${empty
+          ? `<div class="empty"><ha-icon icon="mdi:package-variant-closed"></ha-icon>${paEsc(cfg.empty_text || 'No packages on the way')}</div>`
+          : `<div class="head"><div class="title">${paEsc(cfg.title || 'Packages')}</div>
+               ${outToday ? `<span class="badge hot">${outToday} out for delivery</span>` : `<span class="badge">${list.length}</span>`}</div>
+             <div class="list">${rows}</div>`}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const copy = ev.target.closest('[data-act="copy"]');
+    if (copy) {
+      ev.stopPropagation();
+      navigator.clipboard?.writeText(copy.dataset.v).catch(() => {});
+      copy.querySelector('ha-icon')?.setAttribute('icon', 'mdi:check');
+      return;
+    }
+    if (ev.target.closest('.more')) return;
+    const row = ev.target.closest('[data-act="toggle"]');
+    if (!row) return;
+    const id = row.dataset.id;
+    if (this._open.has(id)) this._open.delete(id); else this._open.add(id);
+    this._render();
+  }
+
+  getCardSize() { return 3; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('parcel-card-editor');
+  }
+
+  static getStubConfig(hass) {
+    const id = Object.keys(hass?.states || {}).find((e) => Array.isArray(hass.states[e].attributes?.deliveries));
+    return { entity: id || 'sensor.parcel_raw_shipment_data', title: 'Packages' };
+  }
+}
+
+customElements.define('parcel-card', ParcelCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'parcel-card',
+  name: 'Parcel Card',
+  description: 'Packages on the way, with delivery progress and tracking history.',
+  preview: false,
+});
+
+class ParcelCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:package-variant', schema: [
+        f.entity('entity', 'Parcel sensor', 'The sensor with a "deliveries" attribute', 'sensor'),
+        f.text('title', 'Title'),
+        f.grid(f.number('max_items', 'Show at most', { min: 1, max: 50, helper: 'Default: 10' }), f.text('empty_text', 'Text when empty')),
+        f.grid(f.toggle('show_delivered', 'Include delivered'), f.toggle('hide_when_empty', 'Hide card when empty')),
+      ] },
+    ];
+  }
+}
+
+customElements.define('parcel-card-editor', ParcelCardEditor);
+})();
+
+// ═══ src/flight-card.js ═══
+(() => {
+/**
+ * Flight Card for Home Assistant (Flightradar24 integration)
+ *
+ * Each tracked flight as a boarding-pass style row: origin and destination
+ * with flags, a route line with the plane at its real position along the
+ * trip, and altitude, speed and arrival time below.
+ *
+ * Configuration:
+ *   type: custom:flight-card
+ *   entity: sensor.flightradar24_additional_tracked   # any FR24 sensor with a "flights" attribute
+ *   title: Tracked Flights
+ *   units: both              # both | metric | imperial
+ *   hide_photo: false        # Hide the aircraft photo FR24 provides
+ *   clear_entity: button.flightradar24_clear_additional_tracked   # Optional "clear" button in the header
+ *   hide_when_empty: false
+ */
+
+const flEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// Country code → flag emoji (no network request needed)
+const flFlag = (cc) => (cc && /^[a-z]{2}$/i.test(cc)) ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '';
+const flTs = (v) => (v == null || v === '' ? null : new Date(typeof v === 'number' && v < 1e12 ? v * 1000 : v));
+const flClock = (d) => (d && !isNaN(d) ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '—');
+const flNum = (n) => new Intl.NumberFormat().format(Math.round(n));
+
+class FlightCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    if (!config?.entity) throw new Error('Set "entity" to a Flightradar24 sensor with a flights attribute');
+    this._config = config;
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (old && old.states[this._config.entity] === hass.states[this._config.entity]) return;
+    this._render();
+  }
+
+  // The plane's position along the route moves with time, not only with state changes.
+  connectedCallback() { this._clock = setInterval(() => { if (!document.hidden) this._render(); }, 60000); }
+  disconnectedCallback() { clearInterval(this._clock); }
+
+  _speed(kts) {
+    if (kts == null) return '—';
+    const u = this._config.units || 'both';
+    const kmh = `${flNum(kts * 1.852)} km/h`, k = `${flNum(kts)} kts`;
+    return u === 'metric' ? kmh : u === 'imperial' ? k : `${k} <small>${kmh}</small>`;
+  }
+
+  _alt(ft) {
+    if (ft == null) return '—';
+    const u = this._config.units || 'both';
+    const m = `${flNum(ft * 0.3048)} m`, f = `${flNum(ft)} ft`;
+    return u === 'metric' ? m : u === 'imperial' ? f : `${f} <small>${m}</small>`;
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    const st = this._hass?.states[cfg.entity];
+    const flights = Array.isArray(st?.attributes?.flights) ? st.attributes.flights : [];
+    const empty = !flights.length;
+    this.style.display = empty && cfg.hide_when_empty ? 'none' : '';
+
+    const rows = flights.map((fl) => {
+      const live = (fl.tracked_type || 'live') === 'live';
+      if (!live) {
+        return `
+          <div class="fl pending">
+            <div class="fh"><ha-icon icon="mdi:airplane-clock"></ha-icon>
+              <span class="fno">${flEsc(fl.flight_number || fl.callsign || 'Flight')}</span>
+              <span class="fsub">${flEsc(fl.callsign || '')}</span>
+              <span class="tag">${flEsc(String(fl.tracked_type).replace(/_/g, ' '))}</span></div>
+          </div>`;
+      }
+      const dep = flTs(fl.time_real_departure ?? fl.time_estimated_departure ?? fl.time_scheduled_departure);
+      const arr = flTs(fl.time_estimated_arrival ?? fl.time_scheduled_arrival);
+      const late = fl.time_estimated_arrival && fl.time_scheduled_arrival && fl.time_estimated_arrival - fl.time_scheduled_arrival > 15 * 60;
+      let pct = null;
+      if (dep && arr && arr > dep) pct = Math.max(0, Math.min(1, (Date.now() - dep) / (arr - dep)));
+      const airborne = (fl.altitude ?? 0) > 0 && !fl.on_ground;
+      const status = !airborne ? (pct != null && pct > 0.9 ? 'Landed' : 'On the ground') : late ? 'Running late' : 'In flight';
+      const mins = arr ? Math.round((arr - Date.now()) / 60000) : null;
+      const left = mins != null && mins > 0 ? (mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m left` : `${mins}m left`) : '';
+      const photo = !cfg.hide_photo && (fl.aircraft_photo_small || fl.aircraft_photo_medium);
+      const o = { code: fl.airport_origin_code_iata, city: fl.airport_origin_city, cc: fl.airport_origin_country_code };
+      const d = { code: fl.airport_destination_code_iata, city: fl.airport_destination_city, cc: fl.airport_destination_country_code };
+
+      return `
+        <div class="fl">
+          <div class="fh">
+            ${photo ? `<img class="ph" src="${flEsc(photo)}" alt="" loading="lazy">` : '<ha-icon icon="mdi:airplane"></ha-icon>'}
+            <div class="fhb">
+              <div><span class="fno">${flEsc(fl.flight_number || fl.callsign)}</span>
+                   <span class="fsub">${flEsc(fl.airline_short || fl.airline || '')}</span></div>
+              <div class="fsub">${flEsc([fl.aircraft_model, fl.aircraft_registration].filter(Boolean).join(' · '))}</div>
+            </div>
+            <span class="tag ${late ? 'late' : airborne ? 'air' : ''}">${status}</span>
+          </div>
+          <div class="route">
+            <div class="ap">
+              <div class="code">${flEsc(o.code || '—')}</div>
+              <div class="city">${flFlag(o.cc)} ${flEsc(o.city || '')}</div>
+              <div class="time">${flClock(dep)}</div>
+            </div>
+            <div class="line">
+              <div class="rail"><div class="done" style="width:${(pct ?? 0) * 100}%"></div></div>
+              ${pct != null ? `<ha-icon class="plane" icon="mdi:airplane" style="left:${pct * 100}%"></ha-icon>` : ''}
+              ${left ? `<div class="left">${left}</div>` : ''}
+            </div>
+            <div class="ap r">
+              <div class="code">${flEsc(d.code || '—')}</div>
+              <div class="city">${flFlag(d.cc)} ${flEsc(d.city || '')}</div>
+              <div class="time ${late ? 'late' : ''}">${flClock(arr)}</div>
+            </div>
+          </div>
+          <div class="stats">
+            <div><ha-icon icon="mdi:arrow-expand-up"></ha-icon><span>${this._alt(fl.altitude)}</span></div>
+            <div><ha-icon icon="mdi:speedometer"></ha-icon><span>${this._speed(fl.ground_speed)}</span></div>
+            ${fl.heading != null ? `<div><ha-icon icon="mdi:compass-outline" style="transform:rotate(${fl.heading}deg)"></ha-icon><span>${Math.round(fl.heading)}°</span></div>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: ${empty ? '12px 16px' : '14px'}; }
+        .head { display: flex; align-items: center; gap: 8px; margin: 0 2px 10px; }
+        .title { flex: 1; font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); }
+        .count { font-size: .75em; font-weight: 600; padding: 2px 9px; border-radius: 10px; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .clear { background: none; border: none; cursor: pointer; padding: 5px; border-radius: 50%; line-height: 0; color: var(--secondary-text-color); --mdc-icon-size: 18px; }
+        .clear:hover { background: rgba(127,127,127,.2); }
+        .empty { display: flex; align-items: center; gap: 10px; color: var(--secondary-text-color); font-size: .9em; --mdc-icon-size: 20px; }
+        .list { display: flex; flex-direction: column; gap: 10px; }
+
+        .fl { border-radius: 14px; padding: 12px; background: var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .fh { display: flex; align-items: center; gap: 10px; --mdc-icon-size: 22px; color: var(--secondary-text-color); }
+        .ph { width: 56px; height: 36px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+        .fhb { flex: 1; min-width: 0; }
+        .fno { font-weight: 700; color: var(--primary-text-color); margin-right: 6px; }
+        .fsub { font-size: .8em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .tag { font-size: .72em; font-weight: 600; padding: 3px 9px; border-radius: 10px; white-space: nowrap; text-transform: capitalize;
+               background: rgba(127,127,127,.18); color: var(--secondary-text-color); }
+        .tag.air  { background: rgba(3,169,244,.16); color: var(--primary-color,#03a9f4); }
+        .tag.late { background: rgba(255,152,0,.16); color: var(--warning-color,#ff9800); }
+        .pending .fh { gap: 8px; }
+
+        .route { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; }
+        .ap { min-width: 64px; max-width: 30%; }
+        .ap.r { text-align: right; }
+        .code { font-size: 1.5em; font-weight: 700; letter-spacing: .02em; color: var(--primary-text-color); line-height: 1.1; }
+        .city { font-size: .75em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .time { font-size: .82em; font-weight: 600; color: var(--primary-text-color); margin-top: 2px; }
+        .time.late { color: var(--warning-color,#ff9800); }
+        .line { position: relative; flex: 1; height: 40px; }
+        .rail { position: absolute; left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%);
+                background: repeating-linear-gradient(90deg, rgba(127,127,127,.5) 0 6px, transparent 6px 11px); }
+        .done { height: 100%; background: var(--primary-color,#03a9f4); }
+        .plane { position: absolute; top: 50%; transform: translate(-50%, -50%) rotate(90deg); color: var(--primary-color,#03a9f4);
+                 --mdc-icon-size: 22px; filter: drop-shadow(0 0 4px rgba(3,169,244,.5)); }
+        .left { position: absolute; left: 0; right: 0; bottom: -4px; text-align: center; font-size: .7em; color: var(--secondary-text-color); }
+
+        .stats { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .8em; color: var(--primary-text-color); }
+        .stats div { display: flex; align-items: center; gap: 5px; --mdc-icon-size: 15px; }
+        .stats ha-icon { color: var(--secondary-text-color); }
+        .stats small { color: var(--secondary-text-color); margin-left: 2px; }
+      </style>
+      <ha-card>
+        ${empty
+          ? `<div class="empty"><ha-icon icon="mdi:airplane-off"></ha-icon>${flEsc(cfg.empty_text || 'No flights tracked')}</div>`
+          : `<div class="head"><div class="title">${flEsc(cfg.title || 'Flights')}</div><span class="count">${flights.length}</span>
+               ${cfg.clear_entity ? `<button class="clear" data-act="clear" title="Clear tracked flights"><ha-icon icon="mdi:close"></ha-icon></button>` : ''}</div>
+             <div class="list">${rows}</div>`}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    if (!ev.target.closest('[data-act="clear"]') || !this._hass) return;
+    const id = this._config.clear_entity;
+    const domain = id.split('.')[0];
+    this._hass.callService(domain, domain === 'button' ? 'press' : 'turn_on', { entity_id: id });
+  }
+
+  getCardSize() { return 3; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('flight-card-editor');
+  }
+
+  static getStubConfig(hass) {
+    const id = Object.keys(hass?.states || {}).find((e) => e.includes('flightradar24') && Array.isArray(hass.states[e].attributes?.flights));
+    return { entity: id || 'sensor.flightradar24_additional_tracked', title: 'Tracked Flights' };
+  }
+}
+
+customElements.define('flight-card', FlightCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'flight-card',
+  name: 'Flight Card',
+  description: 'Tracked Flightradar24 flights with route progress, altitude and speed.',
+  preview: false,
+});
+
+class FlightCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:airplane', schema: [
+        f.entity('entity', 'Flightradar24 sensor', 'Any FR24 sensor with a "flights" attribute', 'sensor'),
+        f.text('title', 'Title'),
+        f.grid(
+          f.select('units', 'Units', [{ value: 'both', label: 'Both' }, { value: 'metric', label: 'Metric' }, { value: 'imperial', label: 'Aviation (ft, kts)' }], 'Default: both'),
+          f.text('empty_text', 'Text when empty'),
+        ),
+        f.entity('clear_entity', 'Clear button', 'Adds an × to the header that presses this button', 'button'),
+        f.grid(f.toggle('hide_photo', 'Hide aircraft photo'), f.toggle('hide_when_empty', 'Hide card when empty')),
+      ] },
+    ];
+  }
+}
+
+customElements.define('flight-card-editor', FlightCardEditor);
+})();
+
+// ═══ src/ev-charger-card.js ═══
+(() => {
+/**
+ * EV Charger Card for Home Assistant
+ *
+ * The home charger and the car on one card: a charger → car link that
+ * animates while energy flows, the car's battery with its charge limit,
+ * when it will be full, and power / energy today / energy this month /
+ * current limit tiles. Works with any charger (Emporia, Wallbox, OpenEVSE…)
+ * and any car integration that exposes a battery level.
+ *
+ * Configuration:
+ *   type: custom:ev-charger-card
+ *   title: Home Charger
+ *   charger_entity: switch.corbett_ev               # Enable/disable switch (tap the power button)
+ *   status_entity: sensor.garage_corbett_ev_status  # Optional text status
+ *   power_entity: sensor.corbett_ev_power_minute_average
+ *   energy_today_entity: sensor.corbett_ev_energy_today
+ *   energy_month_entity: sensor.corbett_ev_energy_this_month
+ *   current_limit_entity: number.garage_corbett_ev_current_limit   # +/- buttons
+ *   charging_threshold: 50                          # W above which it counts as charging (default 50)
+ *
+ *   vehicle_name: Kona EV
+ *   battery_entity: sensor.kona_ev_ev_battery_level
+ *   range_entity: sensor.kona_ev_ev_range
+ *   charge_limit_entity: number.kona_ev_ac_charging_limit
+ *   charging_entity: binary_sensor.kona_ev_ev_battery_charge
+ *   plug_entity: binary_sensor.kona_ev_ev_battery_plug
+ *   completion_entity: sensor.kona_charge_completed_time
+ *   duration_entity: sensor.kona_ev_estimated_charge_duration
+ */
+
+const EV_KEYS = ['charger_entity', 'status_entity', 'power_entity', 'energy_today_entity', 'energy_month_entity',
+  'current_limit_entity', 'battery_entity', 'range_entity', 'charge_limit_entity', 'charging_entity', 'plug_entity',
+  'completion_entity', 'duration_entity'];
+
+const evEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function evDur(min) {
+  if (min == null || isNaN(min) || min <= 0) return '';
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function evWhen(d) {
+  if (!d || isNaN(d)) return '';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const that = new Date(d); that.setHours(0, 0, 0, 0);
+  const diff = Math.round((that - today) / 86400000);
+  const t = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return diff === 0 ? `today at ${t}` : diff === 1 ? `tomorrow at ${t}` : `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${t}`;
+}
+
+class EvChargerCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error('Invalid configuration');
+    this._config = config;
+    this._watched = EV_KEYS.map((k) => config[k]).filter(Boolean);
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (old && !this._watched.some((id) => hass.states[id] !== old.states[id])) return;
+    this._render();
+  }
+
+  _st(key) {
+    const id = this._config[key];
+    const s = id && this._hass?.states[id];
+    return s && s.state !== 'unavailable' && s.state !== 'unknown' ? s : null;
+  }
+
+  _num(key) {
+    const v = parseFloat(this._st(key)?.state);
+    return isNaN(v) ? null : v;
+  }
+
+  // Power in watts whatever unit the sensor reports.
+  _watts() {
+    const s = this._st('power_entity');
+    const v = parseFloat(s?.state);
+    if (isNaN(v)) return null;
+    return s.attributes.unit_of_measurement === 'kW' ? v * 1000 : v;
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    const charger = this._st('charger_entity');
+    const enabled = charger ? charger.state === 'on' : true;
+    const statusText = this._st('status_entity')?.state || charger?.attributes?.status || '';
+    const detail = charger?.attributes?.icon_detail_text || '';
+    const watts = this._watts();
+    const threshold = cfg.charging_threshold ?? 50;
+
+    const plugAttr = this._st('plug_entity');
+    const chargingAttr = this._st('charging_entity');
+    const charging = chargingAttr?.state === 'on' || (watts != null && watts > threshold);
+    const plugged = charging || plugAttr?.state === 'on'
+      || (/connect|plug|charg/i.test(statusText) && !/dis|not/i.test(statusText));
+
+    const soc = this._num('battery_entity');
+    const limit = this._num('charge_limit_entity');
+    const range = this._st('range_entity');
+    const completion = this._st('completion_entity') ? new Date(this._st('completion_entity').state) : null;
+    const durMin = this._num('duration_entity');
+
+    const state = !enabled ? 'off' : charging ? 'charging' : plugged ? 'plugged' : 'idle';
+    const pill = { off: 'Charger off', charging: 'Charging', plugged: 'Plugged in', idle: 'Not connected' }[state];
+
+    let note = '';
+    if (charging) {
+      const parts = [];
+      if (completion && !isNaN(completion) && completion > Date.now()) parts.push(`Full ${evWhen(completion)}`);
+      if (durMin) parts.push(`${evDur(durMin)} to go`);
+      note = parts.join(' · ') || 'Charging';
+    } else if (plugged) {
+      note = soc != null && limit != null && soc >= limit ? 'Charged to its limit' : 'Plugged in, not charging';
+    } else {
+      note = detail || (enabled ? 'Ready — plug in to charge' : 'Charging is turned off');
+    }
+
+    const kw = watts != null ? (watts >= 1000 ? `${(watts / 1000).toFixed(1)} kW` : `${Math.round(watts)} W`) : '—';
+    const energy = (key) => {
+      const s = this._st(key);
+      const v = parseFloat(s?.state);
+      return isNaN(v) ? '—' : `${v >= 100 ? Math.round(v) : v.toFixed(1)} <small>${evEsc(s.attributes.unit_of_measurement || 'kWh')}</small>`;
+    };
+    const lim = this._st('current_limit_entity');
+    const amps = lim ? parseFloat(lim.state) : charger?.attributes?.charging_rate;
+    const socColor = soc == null ? 'var(--disabled-text-color,#9e9e9e)' : soc <= 15 ? 'var(--error-color,#f44336)'
+      : soc <= 30 ? 'var(--warning-color,#ff9800)' : 'var(--success-color,#4caf50)';
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 16px; }
+        .head { display: flex; align-items: center; gap: 10px; }
+        .title { flex: 1; min-width: 0; font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pill { font-size: .78em; font-weight: 600; padding: 4px 10px; border-radius: 12px; white-space: nowrap; }
+        .s-charging .pill { background: rgba(76,175,80,.16); color: var(--success-color,#4caf50); }
+        .s-plugged .pill  { background: rgba(3,169,244,.16); color: var(--primary-color,#03a9f4); }
+        .s-idle .pill, .s-off .pill { background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .pwr { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 50%; line-height: 0; --mdc-icon-size: 20px;
+               color: var(--secondary-text-color); }
+        .pwr.on { color: var(--success-color,#4caf50); }
+        .pwr:hover { background: rgba(127,127,127,.18); }
+
+        .flow { display: flex; align-items: center; gap: 10px; margin: 18px 0 12px; }
+        .node { width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+                background: var(--secondary-background-color); color: var(--secondary-text-color); --mdc-icon-size: 28px; cursor: pointer; }
+        .s-charging .node { background: rgba(76,175,80,.16); color: var(--success-color,#4caf50); }
+        .s-plugged .node  { background: rgba(3,169,244,.14); color: var(--primary-color,#03a9f4); }
+        .cable { position: relative; flex: 1; height: 6px; border-radius: 3px; overflow: hidden; }
+        .s-idle .cable, .s-off .cable { background: repeating-linear-gradient(90deg, rgba(127,127,127,.35) 0 6px, transparent 6px 12px); height: 2px; }
+        .s-plugged .cable  { background: rgba(3,169,244,.35); }
+        .s-charging .cable { background: rgba(76,175,80,.25); }
+        .s-charging .cable::after { content: ''; position: absolute; inset: 0;
+          background: repeating-linear-gradient(90deg, transparent 0 14px, var(--success-color,#4caf50) 14px 22px, transparent 22px 36px);
+          background-size: 36px 100%; animation: flow .9s linear infinite; }
+        @keyframes flow { from { background-position: 0 0; } to { background-position: 36px 0; } }
+        .kw { position: absolute; left: 50%; top: -20px; transform: translateX(-50%); font-size: .78em; font-weight: 700; color: var(--success-color,#4caf50); }
+        .mid { position: relative; flex: 1; display: flex; align-items: center; }
+        .car { display: flex; align-items: center; gap: 10px; flex-shrink: 0; cursor: pointer; }
+        .carname { font-size: .9em; font-weight: 600; color: var(--primary-text-color); }
+        .carsub { font-size: .78em; color: var(--secondary-text-color); }
+
+        .batt { position: relative; height: 26px; border-radius: 8px; background: var(--secondary-background-color, rgba(127,127,127,.12));
+                overflow: hidden; cursor: pointer; }
+        .bfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 8px; transition: width .8s ease; }
+        .s-charging .bfill::after { content: ''; position: absolute; inset: 0;
+          background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent); background-size: 40% 100%;
+          background-repeat: no-repeat; animation: shine 2s ease-in-out infinite; }
+        @keyframes shine { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+        .btxt { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-weight: 700; font-size: .9em; color: #fff;
+                text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+        .limit { position: absolute; top: 3px; bottom: 3px; width: 2px; background: var(--primary-text-color); opacity: .55; border-radius: 1px; }
+        .nt { flex: 1; min-width: 0; }
+        .lim { flex-shrink: 0; font-size: .9em; }
+        .note { display: flex; align-items: center; gap: 6px; margin: 8px 2px 0; font-size: .85em; color: var(--secondary-text-color); --mdc-icon-size: 16px; }
+        .s-charging .note { color: var(--primary-text-color); }
+
+        .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; margin-top: 14px; }
+        .tile { border-radius: 10px; padding: 9px 6px 8px; text-align: center; background: var(--secondary-background-color, rgba(127,127,127,.08));
+                cursor: pointer; min-width: 0; }
+        .tv { font-size: 1.05em; font-weight: 700; color: var(--primary-text-color); white-space: nowrap; }
+        .tv small { font-size: .7em; font-weight: 500; color: var(--secondary-text-color); }
+        .tk { font-size: .66em; text-transform: uppercase; letter-spacing: .05em; color: var(--secondary-text-color); margin-top: 2px; }
+        .amp { display: flex; align-items: center; justify-content: center; gap: 2px; }
+        .amp button { background: none; border: none; cursor: pointer; padding: 2px; border-radius: 50%; line-height: 0; color: var(--secondary-text-color); --mdc-icon-size: 16px; }
+        .amp button:hover { background: rgba(127,127,127,.2); color: var(--primary-text-color); }
+      </style>
+      <ha-card class="s-${state}">
+        <div class="head">
+          <div class="title">${evEsc(cfg.title || 'EV Charger')}</div>
+          <span class="pill">${pill}</span>
+          ${cfg.charger_entity ? `<button class="pwr ${enabled ? 'on' : ''}" data-act="toggle" title="${enabled ? 'Turn charger off' : 'Turn charger on'}"><ha-icon icon="mdi:power"></ha-icon></button>` : ''}
+        </div>
+
+        <div class="flow">
+          <div class="node" data-act="more" data-e="${evEsc(cfg.charger_entity || cfg.power_entity || '')}"><ha-icon icon="mdi:ev-station"></ha-icon></div>
+          <div class="mid"><div class="cable"></div>${charging && watts != null ? `<span class="kw">${kw}</span>` : ''}</div>
+          <div class="car" data-act="more" data-e="${evEsc(cfg.battery_entity || '')}">
+            <div class="node"><ha-icon icon="${charging ? 'mdi:car-electric' : plugged ? 'mdi:car-electric-outline' : 'mdi:car-side'}"></ha-icon></div>
+            ${cfg.vehicle_name || range ? `<div><div class="carname">${evEsc(cfg.vehicle_name || '')}</div>
+              ${range ? `<div class="carsub">${Math.round(parseFloat(range.state))} ${evEsc(range.attributes.unit_of_measurement || 'km')} range</div>` : ''}</div>` : ''}
+          </div>
+        </div>
+
+        ${soc != null ? `
+          <div class="batt" data-act="more" data-e="${evEsc(cfg.battery_entity)}">
+            <div class="bfill" style="width:${Math.max(3, Math.min(100, soc))}%;background:${socColor}"></div>
+            ${limit != null && limit < 100 ? `<div class="limit" style="left:${limit}%" title="Charge limit ${limit}%"></div>` : ''}
+            <span class="btxt">${Math.round(soc)}%</span>
+          </div>` : ''}
+        <div class="note"><ha-icon icon="${charging ? 'mdi:clock-outline' : plugged ? 'mdi:power-plug' : 'mdi:power-plug-off-outline'}"></ha-icon><span class="nt">${evEsc(note)}</span>${soc != null && limit != null ? `<span class="lim">Limit ${Math.round(limit)}%</span>` : ''}</div>
+
+        <div class="tiles">
+          ${cfg.power_entity ? `<div class="tile" data-act="more" data-e="${evEsc(cfg.power_entity)}"><div class="tv">${kw}</div><div class="tk">Power</div></div>` : ''}
+          ${cfg.energy_today_entity ? `<div class="tile" data-act="more" data-e="${evEsc(cfg.energy_today_entity)}"><div class="tv">${energy('energy_today_entity')}</div><div class="tk">Today</div></div>` : ''}
+          ${cfg.energy_month_entity ? `<div class="tile" data-act="more" data-e="${evEsc(cfg.energy_month_entity)}"><div class="tv">${energy('energy_month_entity')}</div><div class="tk">This month</div></div>` : ''}
+          ${amps != null && !isNaN(amps) ? `<div class="tile">
+              <div class="tv amp">${lim ? `<button data-act="amp-" title="Lower current"><ha-icon icon="mdi:minus"></ha-icon></button>` : ''}
+                ${Math.round(amps)} <small>A</small>
+                ${lim ? `<button data-act="amp+" title="Raise current"><ha-icon icon="mdi:plus"></ha-icon></button>` : ''}</div>
+              <div class="tk">Max current</div></div>` : ''}
+        </div>
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    if (!el || !this._hass) return;
+    const act = el.dataset.act;
+    if (act === 'more' && el.dataset.e) {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+    } else if (act === 'toggle') {
+      this._hass.callService('homeassistant', 'toggle', { entity_id: this._config.charger_entity });
+    } else if (act === 'amp+' || act === 'amp-') {
+      const s = this._st('current_limit_entity');
+      if (!s) return;
+      const step = s.attributes.step || 1;
+      const v = parseFloat(s.state) + (act === 'amp+' ? step : -step);
+      const clamped = Math.max(s.attributes.min ?? 6, Math.min(s.attributes.max ?? 80, v));
+      this._hass.callService(this._config.current_limit_entity.split('.')[0], 'set_value',
+        { entity_id: this._config.current_limit_entity, value: clamped });
+    }
+  }
+
+  getCardSize() { return 4; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('ev-charger-card-editor');
+  }
+
+  static getStubConfig() { return { title: 'EV Charger' }; }
+}
+
+customElements.define('ev-charger-card', EvChargerCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'ev-charger-card',
+  name: 'EV Charger Card',
+  description: 'Home charger and car battery with live charging flow, time to full and energy use.',
+  preview: false,
+});
+
+class EvChargerCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'Charger', icon: 'mdi:ev-station', schema: [
+        f.text('title', 'Title'),
+        f.grid(f.entity('charger_entity', 'Charger switch', 'Power button toggles it'), f.entity('status_entity', 'Status', 'Optional text status')),
+        f.grid(f.entity('power_entity', 'Power'), f.entity('current_limit_entity', 'Current limit', 'A number entity — gets +/- buttons')),
+        f.grid(f.entity('energy_today_entity', 'Energy today'), f.entity('energy_month_entity', 'Energy this month')),
+        f.number('charging_threshold', 'Counts as charging above', { min: 0, unit: 'W', helper: 'Default: 50' }),
+      ] },
+      { title: 'Vehicle', icon: 'mdi:car-electric', schema: [
+        f.text('vehicle_name', 'Vehicle name'),
+        f.grid(f.entity('battery_entity', 'Battery level'), f.entity('range_entity', 'Range')),
+        f.grid(f.entity('charge_limit_entity', 'Charge limit'), f.entity('plug_entity', 'Plugged in')),
+        f.grid(f.entity('charging_entity', 'Charging'), f.entity('completion_entity', 'Charge complete time')),
+        f.entity('duration_entity', 'Time to full'),
+      ] },
+    ];
+  }
+}
+
+customElements.define('ev-charger-card-editor', EvChargerCardEditor);
+})();
+
+// ═══ src/battery-card.js ═══
+(() => {
+/**
+ * Battery Card for Home Assistant (Battery Notes integration)
+ *
+ * Finds every device Battery Notes tracks — no list to maintain — and shows
+ * its level, battery type, and how long since the battery was replaced,
+ * lowest first. A shopping list says which batteries to buy for the low
+ * ones, and "Replaced" marks a swap (tap twice to confirm).
+ *
+ * Configuration:
+ *   type: custom:battery-card
+ *   title: Batteries
+ *   sort: level               # level | replaced | name
+ *   low_threshold: 20         # Override Battery Notes' own low threshold (%)
+ *   only_low: false           # List only devices that need attention
+ *   hide_replace: false       # Hide the "Replaced" buttons
+ *   exclude:                  # Device names to skip (partial match)
+ *     - Kitchen Pico
+ */
+
+const btEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function btAge(d) {
+  if (!d || isNaN(d)) return '';
+  const days = Math.floor((Date.now() - d) / 86400000);
+  if (days < 1) return 'today';
+  if (days < 14) return `${days}d ago`;
+  if (days < 60) return `${Math.round(days / 7)}w ago`;
+  const months = Math.floor(days / 30.44);
+  if (months < 12) return `${months}mo ago`;
+  const y = Math.floor(months / 12), m = months % 12;
+  return m ? `${y}y ${m}mo ago` : `${y}y ago`;
+}
+
+function btIcon(pct) {
+  if (pct == null) return 'mdi:battery-unknown';
+  if (pct <= 5) return 'mdi:battery-alert-variant-outline';
+  const r = Math.max(10, Math.round(pct / 10) * 10);
+  return r >= 100 ? 'mdi:battery' : `mdi:battery-${r}`;
+}
+
+class BatteryCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._devices = [];
+    this._watched = [];
+    this._resolvedFor = null;
+    this._confirm = null;
+    this._done = new Set();
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    this._config = config || {};
+    this._resolvedFor = null;
+    if (this._hass) this._resolve();
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) this._resolve();
+    else if (old && !this._watched.some((id) => hass.states[id] !== old.states[id])) return;
+    this._render();
+  }
+
+  // Group Battery Notes' entities by device.
+  _resolve() {
+    const hass = this._hass;
+    this._resolvedFor = hass.entities;
+    const byDev = {};
+    for (const e of Object.values(hass.entities || {})) {
+      if (e.platform !== 'battery_notes' || !e.device_id) continue;
+      const d = (byDev[e.device_id] ||= { id: e.device_id });
+      const id = e.entity_id;
+      if (/^sensor\..*_battery_plus(_\d+)?$/.test(id)) d.level = id;
+      else if (/^sensor\..*_battery_type(_\d+)?$/.test(id)) d.type = id;
+      else if (/^sensor\..*_battery_last_replaced(_\d+)?$/.test(id)) d.replaced = id;
+      else if (/^button\..*_battery_replaced(_\d+)?$/.test(id)) d.button = id;
+      else if (/^binary_sensor\..*_battery_plus_low(_\d+)?$/.test(id)) d.low = id;
+    }
+    this._devices = Object.values(byDev).filter((d) => d.level || d.type || d.replaced);
+    this._watched = this._devices.flatMap((d) => [d.level, d.type, d.replaced, d.low]).filter(Boolean);
+  }
+
+  _rows() {
+    const hass = this._hass;
+    const cfg = this._config;
+    const exclude = (cfg.exclude || []).map((x) => String(x).toLowerCase());
+    return this._devices.map((d) => {
+      const lvl = d.level && hass.states[d.level];
+      const typ = d.type && hass.states[d.type];
+      const dev = hass.devices?.[d.id];
+      const name = dev?.name_by_user || dev?.name || lvl?.attributes?.device_name || (d.type || d.level || '').split('.')[1]?.replace(/_battery.*$/, '').replace(/_/g, ' ');
+      const v = parseFloat(lvl?.state);
+      const pct = isNaN(v) ? null : v;
+      const threshold = cfg.low_threshold ?? lvl?.attributes?.battery_low_threshold ?? 20;
+      const lowFlag = d.low ? hass.states[d.low]?.state === 'on' : false;
+      const low = cfg.low_threshold != null ? pct != null && pct <= threshold : lowFlag || (pct != null && pct <= threshold);
+      const type = typ?.state && !['unknown', 'unavailable'].includes(typ.state) ? typ.state : lvl?.attributes?.battery_type;
+      const qty = Number(lvl?.attributes?.battery_quantity ?? typ?.attributes?.battery_quantity ?? 1) || 1;
+      const repState = d.replaced && hass.states[d.replaced]?.state;
+      const replaced = repState && !['unknown', 'unavailable'].includes(repState) ? new Date(repState) : null;
+      return { ...d, name: name || 'Unknown device', pct, low, type, qty, replaced, threshold };
+    }).filter((r) => !exclude.some((x) => (r.name || '').toLowerCase().includes(x)));
+  }
+
+  _render() {
+    if (!this._config) return;
+    const cfg = this._config;
+    let rows = this._hass ? this._rows() : [];
+    const lowRows = rows.filter((r) => r.low);
+    const sort = cfg.sort || 'level';
+    rows.sort((a, b) => (b.low - a.low)
+      || (sort === 'name' ? a.name.localeCompare(b.name)
+        : sort === 'replaced' ? (a.replaced || 0) - (b.replaced || 0)
+        : (a.pct ?? 101) - (b.pct ?? 101)));
+    if (cfg.only_low) rows = lowRows;
+
+    // What to buy: battery types needed for the low devices.
+    const need = {};
+    for (const r of lowRows) if (r.type) need[r.type] = (need[r.type] || 0) + r.qty;
+    const shopping = Object.entries(need).map(([t, n]) => `${n}× ${t}`).join(', ');
+
+    const color = (r) => r.pct == null ? 'var(--disabled-text-color,#9e9e9e)' : r.low ? 'var(--error-color,#f44336)'
+      : r.pct <= r.threshold * 2 ? 'var(--warning-color,#ff9800)' : 'var(--success-color,#4caf50)';
+
+    const list = rows.map((r) => {
+      const confirming = this._confirm === r.button;
+      const done = this._done.has(r.button);
+      return `
+        <div class="row ${r.low ? 'low' : ''}">
+          <ha-icon class="bi" icon="${btIcon(r.pct)}" style="color:${color(r)}" data-act="more" data-e="${btEsc(r.level || r.replaced)}"></ha-icon>
+          <div class="body" data-act="more" data-e="${btEsc(r.level || r.replaced)}">
+            <div class="name">${btEsc(r.name)}</div>
+            <div class="sub">
+              ${r.type ? `<span class="type">${r.qty > 1 ? `${r.qty}× ` : ''}${btEsc(r.type)}</span>` : ''}
+              ${r.replaced ? `<span>Replaced ${btAge(r.replaced)}</span>` : '<span>Never marked replaced</span>'}
+            </div>
+          </div>
+          <div class="lvl">
+            <div class="bar">${r.pct != null ? `<div class="fill" style="width:${Math.max(2, r.pct)}%;background:${color(r)}"></div>` : ''}</div>
+            <span class="pct" style="${r.low ? `color:${color(r)}` : ''}">${r.pct == null ? '—' : Math.round(r.pct) + '%'}</span>
+          </div>
+          ${!cfg.hide_replace && r.button ? `
+            <button class="rep ${confirming ? 'confirm' : ''} ${done ? 'done' : ''}" data-act="replace" data-b="${btEsc(r.button)}"
+              title="${confirming ? 'Tap again to confirm' : 'Mark battery replaced'}">
+              <ha-icon icon="${done ? 'mdi:check' : 'mdi:battery-sync-outline'}"></ha-icon>${confirming ? '<span>Confirm</span>' : ''}
+            </button>` : ''}
+        </div>`;
+    }).join('');
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 14px; }
+        .head { display: flex; align-items: center; gap: 8px; margin: 0 2px 4px; }
+        .title { flex: 1; font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); }
+        .chip { font-size: .75em; font-weight: 600; padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
+        .chip.n   { background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .chip.low { background: rgba(244,67,54,.15); color: var(--error-color,#f44336); }
+        .chip.ok  { background: rgba(76,175,80,.15); color: var(--success-color,#4caf50); }
+        .shop { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; padding: 8px 10px; border-radius: 10px; font-size: .85em;
+                background: rgba(255,152,0,.12); color: var(--primary-text-color); --mdc-icon-size: 18px; }
+        .shop ha-icon { color: var(--warning-color,#ff9800); }
+        .list { display: flex; flex-direction: column; margin-top: 6px; }
+        .row { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--divider-color, rgba(127,127,127,.15)); }
+        .row:last-child { border-bottom: none; }
+        .bi { --mdc-icon-size: 24px; flex-shrink: 0; cursor: pointer; }
+        .body { flex: 1; min-width: 0; cursor: pointer; }
+        .name { font-size: .9em; font-weight: 500; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .low .name { font-weight: 600; }
+        .sub { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: .74em; color: var(--secondary-text-color); margin-top: 1px; }
+        .type { font-weight: 600; font-family: monospace; font-size: 1.05em; }
+        .lvl { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .bar { width: 64px; height: 6px; border-radius: 3px; background: var(--divider-color, rgba(127,127,127,.2)); overflow: hidden; }
+        .fill { height: 100%; border-radius: 3px; }
+        .pct { width: 36px; text-align: right; font-size: .85em; font-weight: 600; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+        .rep { display: flex; align-items: center; gap: 4px; border: none; cursor: pointer; padding: 6px; border-radius: 16px; line-height: 0;
+               background: none; color: var(--secondary-text-color); font: inherit; font-size: .75em; font-weight: 600; --mdc-icon-size: 18px; flex-shrink: 0; }
+        .rep:hover { background: rgba(127,127,127,.18); color: var(--primary-text-color); }
+        .rep.confirm { background: var(--primary-color,#03a9f4); color: var(--text-primary-color,#fff); padding: 6px 10px 6px 8px; line-height: 1; }
+        .rep.done { color: var(--success-color,#4caf50); }
+        .empty { margin-top: 10px; font-size: .88em; color: var(--secondary-text-color); }
+        @media (max-width: 420px) { .bar { width: 40px; } }
+      </style>
+      <ha-card>
+        <div class="head">
+          <div class="title">${btEsc(cfg.title || 'Batteries')}</div>
+          ${lowRows.length ? `<span class="chip low">${lowRows.length} low</span>` : this._devices.length ? '<span class="chip ok">All good</span>' : ''}
+          <span class="chip n">${this._devices.length} devices</span>
+        </div>
+        ${shopping ? `<div class="shop"><ha-icon icon="mdi:cart-outline"></ha-icon><span>Buy: <b>${btEsc(shopping)}</b></span></div>` : ''}
+        ${rows.length ? `<div class="list">${list}</div>`
+          : `<div class="empty">${this._devices.length ? 'No batteries need attention.' : 'No Battery Notes devices found — install the Battery Notes integration and add your devices.'}</div>`}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    if (!el || !this._hass) return;
+    if (el.dataset.act === 'more' && el.dataset.e) {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+      return;
+    }
+    if (el.dataset.act !== 'replace') return;
+    const b = el.dataset.b;
+    // First tap asks for confirmation; a second tap within 4 s presses Battery Notes' "replaced" button.
+    if (this._confirm !== b) {
+      this._confirm = b;
+      clearTimeout(this._confirmTimer);
+      this._confirmTimer = setTimeout(() => { this._confirm = null; this._render(); }, 4000);
+      this._render();
+      return;
+    }
+    clearTimeout(this._confirmTimer);
+    this._confirm = null;
+    this._hass.callService('button', 'press', { entity_id: b });
+    this._done.add(b);
+    setTimeout(() => { this._done.delete(b); this._render(); }, 3000);
+    this._render();
+  }
+
+  getCardSize() { return 5; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('battery-card-editor');
+  }
+
+  static getStubConfig() { return { title: 'Batteries' }; }
+}
+
+customElements.define('battery-card', BatteryCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'battery-card',
+  name: 'Battery Card',
+  description: 'Every Battery Notes device with level, battery type, age and a shopping list for low ones.',
+  preview: false,
+});
+
+class BatteryCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:battery-heart-variant', schema: [
+        f.text('title', 'Title'),
+        f.grid(
+          f.select('sort', 'Sort by', [{ value: 'level', label: 'Battery level' }, { value: 'replaced', label: 'Oldest replacement' }, { value: 'name', label: 'Name' }], 'Low batteries always come first'),
+          f.number('low_threshold', 'Low at', { min: 1, max: 100, unit: '%', helper: "Default: each device's Battery Notes threshold" }),
+        ),
+        f.grid(f.toggle('only_low', 'Only show low batteries'), f.toggle('hide_replace', 'Hide "Replaced" buttons')),
+        f.states('exclude', 'Hide devices', [], 'Type part of a device name and press Enter'),
+      ] },
+    ];
+  }
+}
+
+customElements.define('battery-card-editor', BatteryCardEditor);
+})();
+
+console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer · Media · Security · Parcels · Flights · EV · Batteries ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');

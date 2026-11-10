@@ -301,6 +301,109 @@ black_toner_entity: sensor.x  # override any entity: <key>_entity
 
 ---
 
+## Active Media Card
+
+Shows only the media players that are doing something, with artwork, a live progress bar and play/skip/volume controls. When nothing plays it shrinks to one line, or hides.
+
+```yaml
+type: custom:active-media-card
+title: Now Playing
+hide_when_empty: false
+players:
+  - entity: media_player.family_room_apple_tv
+    name: Family Room
+  - entity: media_player.russells_bedroom
+    name: Sonos Beam
+    hide_paused: true
+    hide_when_active: [media_player.xboxone, media_player.russell_bedroom_tv]
+```
+
+---
+
+## Security Overview Card
+
+Alarm state, locks, doors and windows, motion and leaks in one card. Sensors are grouped by device class; motion tiles glow when active and fade over two hours. A **Batteries** tab finds each sensor's battery from its device. `compact: true` shows only what needs attention, for the Home page.
+
+```yaml
+type: custom:security-card
+alarm_entity: alarm_control_panel.alarmo
+locks: [lock.touchscreen_deadbolt_z_wave_plus]
+sensors:
+  - entity: binary_sensor.konnected_front_door_zone_1
+    name: Front Door
+  - entity: binary_sensor.kitchen_motion
+    name: Kitchen
+compact: false
+recent_minutes: 5
+```
+
+---
+
+## Parcel Card
+
+Packages from the Parcel integration with a carrier badge, a four-step progress track, the latest scan and the expected delivery day. Tap a package for its history and to copy the tracking number.
+
+```yaml
+type: custom:parcel-card
+entity: sensor.parcel_raw_shipment_data
+show_delivered: false
+hide_when_empty: true
+```
+
+---
+
+## Flight Card
+
+Tracked Flightradar24 flights: origin and destination with flags, the plane drawn at its real position along the route, and altitude, speed and arrival time (flagged when running late).
+
+```yaml
+type: custom:flight-card
+entity: sensor.flightradar24_additional_tracked
+units: both                  # both | metric | imperial
+clear_entity: button.flightradar24_clear_additional_tracked
+hide_when_empty: true
+```
+
+---
+
+## EV Charger Card
+
+The home charger and the car together: an animated charger → car link while energy flows, the car's battery with its charge limit, when it will be full, and power / today / this month / current-limit tiles (with +/-).
+
+```yaml
+type: custom:ev-charger-card
+title: Corbett Home EV Charger
+charger_entity: switch.corbett_ev
+status_entity: sensor.garage_corbett_ev_status
+power_entity: sensor.corbett_ev_power_minute_average
+energy_today_entity: sensor.corbett_ev_energy_today
+energy_month_entity: sensor.corbett_ev_energy_this_month
+current_limit_entity: number.garage_corbett_ev_current_limit
+vehicle_name: Kona EV
+battery_entity: sensor.kona_ev_ev_battery_level
+range_entity: sensor.kona_ev_ev_range
+charge_limit_entity: number.kona_ev_ac_charging_limit
+charging_entity: binary_sensor.kona_ev_ev_battery_charge
+plug_entity: binary_sensor.kona_ev_ev_battery_plug
+completion_entity: sensor.kona_charge_completed_time
+duration_entity: sensor.kona_ev_estimated_charge_duration
+```
+
+---
+
+## Battery Card
+
+Every device tracked by [Battery Notes](https://github.com/andrew-codechimp/HA-Battery-Notes), found automatically: level, battery type and quantity, and how long since it was replaced, lowest first. A shopping list names the batteries to buy for the low ones, and **Replaced** (tap twice) marks a swap.
+
+```yaml
+type: custom:battery-card
+sort: level          # level | replaced | name
+only_low: false
+exclude: [Kitchen Pico]
+```
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.

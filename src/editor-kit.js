@@ -380,6 +380,8 @@
   RusstumEditor.f = {
     text:   (name, label, helper) => ({ name, label, helper, selector: { text: {} } }),
     entity: (name, label, helper, domain) => ({ name, label, helper, selector: { entity: domain ? { domain } : {} } }),
+    // Several entities in one picker (stored as an array of entity IDs).
+    entities: (name, label, helper, domain) => ({ name, label, helper, selector: { entity: { multiple: true, ...(domain ? { domain } : {}) } } }),
     icon:   (name, label = 'Icon', helper) => ({ name, label, helper, selector: { icon: {} } }),
     number: (name, label, { min, max, step, unit, helper } = {}) => ({
       name, label, helper,
