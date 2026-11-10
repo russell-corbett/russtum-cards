@@ -269,6 +269,38 @@ player_list_entity: sensor.minecraft_server_players_list
 
 ---
 
+## Printer Card
+
+A picture of a colour laser all-in-one with live toner levels in its front window, the printer status on its screen, and warnings drawn on the part that needs attention (door, paper tray, output slot). Page counts and part life sit below.
+
+Built for the [Brother integration](https://www.home-assistant.io/integrations/brother/), but works with any printer whose entity IDs end the same way (or set each entity by hand).
+
+```yaml
+type: custom:printer-card
+device_id: <pick the printer in the visual editor>
+# or, without a device:
+entity_prefix: mfc_l3780cdw   # finds sensor.mfc_l3780cdw_black_toner, etc.
+
+# Optional
+title: Office Printer         # defaults to the device name
+toner_low: 15                 # toner % that counts as low (default 15)
+part_low: 20                  # drum / belt / fuser % that counts as low (default 20)
+hide_pages: false
+hide_parts: false
+black_toner_entity: sensor.x  # override any entity: <key>_entity
+```
+
+### Features
+
+- **Toner window** — C/M/Y/K levels fill from the bottom; a low cartridge pulses red
+- **Screen** shows the printer status and message (Idle · Sleep, Printing, Error…), coloured by state, with a paper sheet feeding out while printing
+- **Problem overlays** — door open, paper jam and no paper are drawn on the printer itself
+- **Page tiles** — B/W, colour, duplex and total pages
+- **Part life** — all four drums in one row, belt unit, fuser and paper feed kit
+- **Alert chips** in the header, or "No issues" when everything is fine
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.

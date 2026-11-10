@@ -47,7 +47,11 @@
         } catch (e) {
           console.warn('russtum-cards: could not preload ha-form', e);
         }
-        await customElements.whenDefined('ha-form');
+        // Never block the editor forever if HA changes how it loads forms.
+        await Promise.race([
+          customElements.whenDefined('ha-form'),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
       })();
     }
     return formReady;
@@ -394,6 +398,12 @@
     configEntry: (name, label, integration, helper) => ({
       name, label, helper, selector: { config_entry: { integration } },
     }),
+    // Device picker, optionally limited to one integration's devices.
+    device: (name, label, integration, helper) => ({
+      name, label, helper,
+      selector: { device: integration ? { filter: [{ integration }] } : {} },
+    }),
+    toggle: (name, label, helper) => ({ name, label, helper, selector: { boolean: {} } }),
     grid: (...schema) => ({ type: 'grid', name: '', schema }),
   };
 
