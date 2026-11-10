@@ -36,7 +36,14 @@ function parsePrimaryStatus(rawStatus) {
   if (!rawStatus || rawStatus === 'unavailable' || rawStatus === 'unknown') {
     return { label: 'Unavailable', icon: 'mdi:help-circle', color: 'var(--disabled-text-color, #9e9e9e)', codes: [] };
   }
-  const codes = rawStatus.toUpperCase().split(/\s+/);
+  // Accept NUT codes ("OL CHRG") and the friendly text some sensors report ("On Battery Battery Discharging").
+  const text = rawStatus.toLowerCase();
+  const words = [
+    [/on ?line/, 'OL'], [/on battery/, 'OB'], [/low battery/, 'LB'], [/replace battery/, 'RB'], [/discharg/, 'DISCHRG'],
+    [/(?<!dis)charging/, 'CHRG'], [/bypass/, 'BYPASS'], [/calibrat/, 'CAL'], [/overload/, 'OVER'], [/off ?line/, 'OFF'],
+    [/forced shutdown/, 'FSD'], [/trim/, 'TRIM'], [/boost/, 'BOOST'],
+  ].filter(([re]) => re.test(text)).map(([, c]) => c);
+  const codes = words.length ? words : rawStatus.toUpperCase().split(/\s+/);
   const primary = STATUS_PRIORITY.find(c => codes.includes(c)) || codes[0];
   const info = NUT_STATUS[primary] || { label: primary, icon: 'mdi:information', color: 'var(--secondary-text-color)' };
   return { ...info, codes };
@@ -157,167 +164,47 @@ class UpsCard extends HTMLElement {
         ? 'var(--warning-color, #ff9800)'
         : 'var(--primary-color, #03a9f4)';
 
+    const metric = (icon, label, pct, color, warn) => `
+      <div class="m" title="${label}: ${pct != null ? pct + '%' : 'unknown'}">
+        <ha-icon icon="${icon}" style="color:${color}"></ha-icon>
+        <div class="bar"><div class="fill" style="width:${pct ?? 0}%;background:${color}"></div></div>
+        <span class="v ${warn ? 'error' : ''}">${pct != null ? Math.round(pct) + '%' : '—'}</span>
+      </div>`;
+
     const html = `
       <style>
         :host { display: block; }
-
-        ha-card { padding: 16px 16px 14px; }
-
-        /* ── Header ── */
-        .header {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          margin-bottom: 16px;
-        }
-        .header-icon {
-          --mdc-icon-size: 36px;
-          color: ${status.color};
-          flex-shrink: 0;
-        }
-        .header-info { flex: 1; min-width: 0; }
-        .title {
-          font-size: 1.1em;
-          font-weight: 600;
-          color: var(--primary-text-color);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .status-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          margin-top: 3px;
-          font-size: 0.8em;
-          font-weight: 500;
-          color: ${status.color};
-        }
-        .status-badge ha-icon { --mdc-icon-size: 14px; }
-
-        /* ── Header runtime (top-right) ── */
-        .header-runtime {
-          text-align: right;
-          flex-shrink: 0;
-        }
-        .runtime-label {
-          font-size: 0.68em;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-        .runtime-val {
-          font-size: 1.1em;
-          font-weight: 700;
-          color: ${isOnBattery ? 'var(--warning-color, #ff9800)' : 'var(--primary-text-color)'};
-        }
-
-        /* ── Metric rows ── */
-        .metrics { display: flex; flex-direction: column; gap: 10px; }
-
-        .metric {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-        .metric-icon {
-          --mdc-icon-size: 20px;
-          flex-shrink: 0;
-        }
-        .metric-body { flex: 1; min-width: 0; }
-        .metric-label {
-          font-size: 0.72em;
-          color: var(--secondary-text-color);
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          margin-bottom: 3px;
-        }
-        .metric-bar-wrap {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .metric-bar {
-          flex: 1;
-          height: 5px;
-          background: var(--secondary-background-color);
-          border-radius: 3px;
-          overflow: hidden;
-        }
-        .metric-bar-fill {
-          height: 100%;
-          border-radius: 3px;
-          transition: width 0.5s ease, background 0.3s;
-        }
-        .metric-value {
-          font-size: 0.82em;
-          font-weight: 600;
-          color: var(--primary-text-color);
-          min-width: 38px;
-          text-align: right;
-          white-space: nowrap;
-        }
-        .metric-value.warn { color: var(--warning-color, #ff9800); }
-        .metric-value.error { color: var(--error-color, #f44336); }
-
-        .metric-icon.battery { color: ${batteryLow ? 'var(--error-color, #f44336)' : isCharging ? 'var(--info-color, #2196f3)' : 'var(--success-color, #4caf50)'}; }
-        .metric-icon.load    { color: ${loadWarn   ? 'var(--error-color, #f44336)' : 'var(--primary-color, #03a9f4)'}; }
+        ha-card { padding: 12px 14px; }
+        .row { display: flex; align-items: center; gap: 10px; }
+        .hi { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+              --mdc-icon-size: 22px; color: ${status.color}; background: color-mix(in srgb, ${status.color} 16%, transparent); }
+        .info { flex: 1; min-width: 0; }
+        .title { font-size: .95em; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .status { font-size: .78em; font-weight: 500; color: ${status.color}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rt { text-align: right; flex-shrink: 0; line-height: 1.15; }
+        .rt b { display: block; font-size: 1.05em; color: ${isOnBattery ? 'var(--warning-color, #ff9800)' : 'var(--primary-text-color)'}; }
+        .rt span { font-size: .68em; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color); }
+        .metrics { display: flex; gap: 14px; margin-top: 10px; }
+        .m { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; --mdc-icon-size: 18px; }
+        .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--divider-color, rgba(127,127,127,.2)); overflow: hidden; }
+        .fill { height: 100%; border-radius: 3px; transition: width .6s ease; }
+        .v { font-size: .82em; font-weight: 600; color: var(--primary-text-color); min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+        .v.error { color: var(--error-color, #f44336); }
       </style>
-
       <ha-card>
-        <div class="header">
-          <ha-icon class="header-icon" icon="mdi:battery-heart-variant"></ha-icon>
-          <div class="header-info">
+        <div class="row">
+          <div class="hi"><ha-icon icon="${status.icon}"></ha-icon></div>
+          <div class="info">
             <div class="title">${title}</div>
-            <div class="status-badge">
-              <ha-icon icon="${status.icon}"></ha-icon>
-              ${status.label}
-            </div>
+            <div class="status">${status.label}</div>
           </div>
-          ${config.runtime_entity ? `
-          <div class="header-runtime">
-            <div class="runtime-label">Runtime</div>
-            <div class="runtime-val">${formatRuntime(runtimeSec)}</div>
-          </div>` : ''}
+          ${config.runtime_entity ? `<div class="rt"><b>${formatRuntime(runtimeSec)}</b><span>runtime</span></div>` : ''}
         </div>
-
+        ${config.battery_entity || config.load_entity ? `
         <div class="metrics">
-
-          ${config.battery_entity ? `
-          <div class="metric">
-            <ha-icon class="metric-icon battery" icon="${batIcon}"></ha-icon>
-            <div class="metric-body">
-              <div class="metric-label">Battery</div>
-              <div class="metric-bar-wrap">
-                <div class="metric-bar">
-                  <div class="metric-bar-fill"
-                       style="width:${batteryPct ?? 0}%; background:${batBarColor};"></div>
-                </div>
-                <span class="metric-value ${batteryLow ? 'error' : ''}">
-                  ${batteryPct != null ? batteryPct + '%' : '—'}
-                </span>
-              </div>
-            </div>
-          </div>` : ''}
-
-          ${config.load_entity ? `
-          <div class="metric">
-            <ha-icon class="metric-icon load" icon="mdi:gauge"></ha-icon>
-            <div class="metric-body">
-              <div class="metric-label">Load</div>
-              <div class="metric-bar-wrap">
-                <div class="metric-bar">
-                  <div class="metric-bar-fill"
-                       style="width:${loadPct ?? 0}%; background:${loadBarColor};"></div>
-                </div>
-                <span class="metric-value ${loadWarn ? 'error' : ''}">
-                  ${loadPct != null ? loadPct + '%' : '—'}
-                </span>
-              </div>
-            </div>
-          </div>` : ''}
-
-        </div>
+          ${config.battery_entity ? metric(batIcon, 'Battery', batteryPct, batBarColor, batteryLow) : ''}
+          ${config.load_entity ? metric('mdi:gauge', 'Load', loadPct, loadBarColor, loadWarn) : ''}
+        </div>` : ''}
       </ha-card>
     `;
     // Skip the DOM rebuild (CSS re-parse, ha-icon re-creation) when nothing visible changed.
@@ -327,7 +214,7 @@ class UpsCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 3;
+    return 2;
   }
 
   static async getConfigElement() {

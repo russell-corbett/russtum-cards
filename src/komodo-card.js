@@ -8,7 +8,8 @@
  * Configuration:
  *   type: custom:komodo-card
  *   title: Komodo
- *   warn: 80            # Gauge turns amber at this % (default 80)
+ *   layout: compact     # compact (one row per server, default) | gauges (ring gauges)
+ *   warn: 80            # Turns amber at this % (default 80)
  *   critical: 90        # …and red at this % (default 90)
  *   servers: [immich, media-docker]   # Optional: only these, in this order
  *   exclude: [Homepage]               # Optional: skip these
@@ -90,10 +91,22 @@ class KomodoCard extends HTMLElement {
       </div>`;
   }
 
+  // Compact metric: label + value on one line, a thin bar under it.
+  _bar(label, pct, sub, entity) {
+    const warn = this._config.warn ?? 80, crit = this._config.critical ?? 90;
+    const tone = pct == null ? 'na' : pct >= crit ? 'crit' : pct >= warn ? 'warn' : 'ok';
+    return `
+      <div class="mb ${tone}" data-e="${koEsc(entity || '')}" title="${label}: ${pct == null ? 'unknown' : pct.toFixed(1) + '%'}${sub ? ' · ' + sub : ''}">
+        <div class="mt"><span>${label}</span><b>${pct == null ? '—' : Math.round(pct) + '%'}</b></div>
+        <div class="mbar"><div style="width:${Math.max(0, Math.min(100, pct ?? 0))}%"></div></div>
+      </div>`;
+  }
+
   _render() {
     if (!this._config) return;
     const cfg = this._config;
     const hass = this._hass;
+    const compact = cfg.layout !== 'gauges';
     const crit = cfg.critical ?? 90, warn = cfg.warn ?? 80;
     const only = (cfg.servers || []).map((s) => String(s).toLowerCase());
     const exclude = (cfg.exclude || []).map((s) => String(s).toLowerCase());
@@ -125,6 +138,20 @@ class KomodoCard extends HTMLElement {
       const memFree = this._num(s.ids.memory_free), memTot = this._num(s.ids.memory_total);
       const diskFree = this._num(s.ids.disk_free), diskTot = this._num(s.ids.disk_total);
       const load = this._num(s.ids.load_average_1m);
+      if (compact) {
+        return `
+        <div class="crow s-${s.status}">
+          <div class="cn" data-e="${koEsc(s.ids.server_state || '')}">
+            <span class="dot"></span>
+            <div class="cnb"><div class="sn">${koEsc(s.name)}</div>
+              <div class="csub">${s.status !== 'ok' ? `<b class="st">${s.status === 'down' ? 'Down' : s.status === 'disabled' ? 'Disabled' : 'Unknown'}</b>` : ''}${s.alerts.map((a) => `<span class="ca">${koEsc(KO_ALERT_NAMES[a] || a)}</span>`).join('')}${!s.alerts.length && s.status === 'ok' && load != null ? `load ${load.toFixed(2)}` : ''}</div>
+            </div>
+          </div>
+          ${this._bar('CPU', s.cpu, load != null ? `load ${load.toFixed(2)}` : '', s.ids.cpu_usage)}
+          ${this._bar('MEM', s.mem, memFree != null ? `${koGB(memFree)} free of ${koGB(memTot)}` : '', s.ids.memory_usage)}
+          ${this._bar('DISK', s.disk, diskFree != null ? `${koGB(diskFree)} free of ${koGB(diskTot)}` : '', s.ids.disk_usage)}
+        </div>`;
+      }
       return `
         <div class="srv s-${s.status}">
           <div class="sh" data-e="${koEsc(s.ids.server_state || '')}">
@@ -146,8 +173,24 @@ class KomodoCard extends HTMLElement {
       <style>
         :host { display: block; }
         ha-card { padding: 14px; }
-        .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-        .hi { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; --mdc-icon-size: 24px; flex-shrink: 0; }
+        .head { display: flex; align-items: center; gap: 10px; margin-bottom: ${compact ? 6 : 12}px; }
+        .clist { display: flex; flex-direction: column; }
+        .crow { display: grid; grid-template-columns: minmax(104px, 1.6fr) repeat(3, minmax(0, 1fr)); align-items: center; gap: 10px;
+                padding: 7px 2px; border-bottom: 1px solid var(--divider-color, rgba(127,127,127,.12)); }
+        .crow:last-child { border-bottom: none; }
+        .cn { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+        .cnb { min-width: 0; }
+        .csub { display: flex; gap: 4px; font-size: .7em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; }
+        .ca { font-weight: 600; padding: 0 6px; border-radius: 6px; background: rgba(255,152,0,.15); color: var(--warning-color,#ff9800); }
+        .mb { min-width: 0; cursor: pointer; }
+        .mt { display: flex; justify-content: space-between; align-items: baseline; font-size: .7em; color: var(--secondary-text-color); }
+        .mt b { font-size: 1.25em; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+        .mb.warn b { color: var(--warning-color,#ff9800); } .mb.crit b { color: var(--error-color,#f44336); }
+        .mbar { height: 4px; border-radius: 2px; margin-top: 3px; background: rgba(127,127,127,.22); overflow: hidden; }
+        .mbar div { height: 100%; border-radius: 2px; background: var(--success-color,#4caf50); }
+        .mb.warn .mbar div { background: var(--warning-color,#ff9800); } .mb.crit .mbar div { background: var(--error-color,#f44336); }
+        @media (max-width: 420px) { .crow { gap: 8px; grid-template-columns: minmax(84px, 1.2fr) repeat(3, minmax(0, 1fr)); } }
+        .hi { width: ${compact ? 34 : 40}px; height: ${compact ? 34 : 40}px; border-radius: 12px; display: flex; align-items: center; justify-content: center; --mdc-icon-size: 24px; flex-shrink: 0; }
         .ok .hi   { background: rgba(76,175,80,.15); color: var(--success-color,#4caf50); }
         .warn .hi { background: rgba(255,152,0,.15); color: var(--warning-color,#ff9800); }
         .crit .hi { background: rgba(244,67,54,.15); color: var(--error-color,#f44336); }
@@ -189,14 +232,14 @@ class KomodoCard extends HTMLElement {
           <div class="hi"><ha-icon icon="${headTone === 'ok' ? 'mdi:server' : 'mdi:server-network-off'}"></ha-icon></div>
           <div><div class="ht">${koEsc(cfg.title || 'Komodo')} · ${servers.length} server${servers.length === 1 ? '' : 's'}</div><div class="hl">${summary}</div></div>
         </div>
-        ${servers.length ? `<div class="grid">${cards}</div>` : `<div class="empty">No Komodo servers found — is the Komodo integration set up?</div>`}
+        ${servers.length ? `<div class="${compact ? 'clist' : 'grid'}">${cards}</div>` : `<div class="empty">No Komodo servers found — is the Komodo integration set up?</div>`}
       </ha-card>`;
     if (html === this._lastHtml) return;
     this._lastHtml = html;
     this.shadowRoot.innerHTML = html;
   }
 
-  getCardSize() { return 5; }
+  getCardSize() { return this._config?.layout === 'gauges' ? 5 : 3; }
 
   static async getConfigElement() {
     await window.RusstumEditor.ensureHaForm();
@@ -221,7 +264,7 @@ class KomodoCardEditor extends window.RusstumEditor {
     const { f } = window.RusstumEditor;
     return [
       { title: 'General', icon: 'mdi:server', schema: [
-        f.text('title', 'Title'),
+        f.grid(f.text('title', 'Title'), f.select('layout', 'Layout', [{ value: 'compact', label: 'Compact rows' }, { value: 'gauges', label: 'Ring gauges' }], 'Default: compact rows')),
         f.grid(
           f.number('warn', 'Amber at', { min: 1, max: 100, unit: '%', helper: 'Default: 80' }),
           f.number('critical', 'Red at', { min: 1, max: 100, unit: '%', helper: 'Default: 90' }),

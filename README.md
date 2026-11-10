@@ -406,10 +406,11 @@ exclude: [Kitchen Pico]
 
 ## Komodo Card
 
-Every server Komodo manages, found automatically: a status light, active alerts (disk, memory, CPU…), CPU / memory / disk ring gauges with free space, and load. Servers with problems sort first.
+Every server Komodo manages, found automatically: a status light, active alerts (disk, memory, CPU…), and CPU / memory / disk usage. Servers with problems sort first. The default compact layout is one row per server (hover a bar for free space); `layout: gauges` shows larger ring gauges.
 
 ```yaml
 type: custom:komodo-card
+layout: compact          # compact | gauges
 warn: 80
 critical: 90
 exclude: [Homepage]      # optional
