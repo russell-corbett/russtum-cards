@@ -449,6 +449,35 @@ backup_max_age: 26     # hours
 
 ---
 
+## Room Overview Card
+
+One room in one compact card: its temperature and humidity (read from the thermostat when no sensors are given), a glow while someone is there, light tiles (tap to toggle, **drag sideways to dim**, hold for details), thermostat tiles with − / + (quick taps are batched into one change), and chips for everything else. Named `room-overview-card` so it never clashes with the popular HACS `room-card`.
+
+```yaml
+type: custom:room-overview-card
+area: family_room                 # name and icon come from the area
+lights: [light.family_room_lights]
+climate: [climate.family_room_thermostat]
+occupancy: [binary_sensor.family_room_motion]
+entities:
+  - entity: media_player.family_room_tv
+    name: TV
+    icon: mdi:television
+  - entity: media_player.family_room_apple_tv
+    name: Apple TV
+    icon: mdi:apple
+
+# A room with two thermostats and a link to its own dashboard:
+type: custom:room-overview-card
+name: Master Bedroom
+icon: mdi:bed-king
+navigate: /lovelace/master-bedroom
+lights: [light.master_bedroom_lights]
+climate: [climate.master_bedroom_thermostat, climate.ensuite_thermostat]
+```
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
