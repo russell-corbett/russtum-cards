@@ -368,7 +368,7 @@ hide_when_empty: true
 
 ## EV Charger Card
 
-The home charger and the car together: an animated charger → car link while energy flows, the car's battery with its charge limit, when it will be full, and power / today / this month / current-limit tiles (with +/-).
+The home charger and the car together: an animated charger → car link while energy flows, the car's battery with its charge limit, when it will be full, and power / today / this month / current-limit tiles (with +/-). Knows the difference between charging at home and at a public charger.
 
 ```yaml
 type: custom:ev-charger-card
@@ -387,7 +387,11 @@ charging_entity: binary_sensor.kona_ev_ev_battery_charge
 plug_entity: binary_sensor.kona_ev_ev_battery_plug
 completion_entity: sensor.kona_charge_completed_time
 duration_entity: sensor.kona_ev_estimated_charge_duration
+location_entity: device_tracker.kona_ev_location          # optional
+vehicle_power_entity: sensor.garage_kona_ev_ev_charging_power   # optional
 ```
+
+When the car is charging somewhere else (it reports charging, the home charger isn't delivering power, and the car is away or the home charger says nothing is connected), the card says **Charging away** and shows where, using the car's own charging power, instead of drawing the home charger as active.
 
 ---
 
