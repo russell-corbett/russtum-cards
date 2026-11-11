@@ -560,6 +560,24 @@ sort: name            # name | brightness | recent
 
 ---
 
+## Family Card
+
+Everyone at a glance: photo with a coloured ring (home, in a zone, heading home, away), where they are and for how long ("At MUN · 25 min"), **Home in 8 min** when they're on their way back, their phone battery (red when low, green while charging), and **which car they're in** when a car tracker is next to them. Phone sensors are found automatically from iCloud3 or the Companion app. Tap opens a person's dashboard; hold can run any action.
+
+```yaml
+type: custom:family-card
+title: Family
+people:
+  - entity: person.russell_corbett
+    navigate: /lovelace/russell-s-dash
+cars:
+  - entity: device_tracker.kona_ev_location
+    name: Kona
+hide_when_all_home: true
+```
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
