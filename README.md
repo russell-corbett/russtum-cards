@@ -482,6 +482,52 @@ climate: [climate.master_bedroom_thermostat, climate.ensuite_thermostat]
 
 ---
 
+## Climate Overview Card
+
+Every thermostat at a glance, grouped by HA floor: each room's temperature against its setpoint (with − / +), a flame while it heats, and rooms well over or under target tinted red or blue. The header sums it up ("2 heating · Avg 19.2° · Family Room +3.3°"). Thermostats are found automatically; low frost-protection setpoints are never flagged as too hot.
+
+```yaml
+type: custom:climate-overview-card
+integration: mysa        # only Mysa thermostats (skips HomeKit duplicates)
+floor: main_floor        # optional: one floor per card; omit for the whole house
+tolerance: 1.5           # degrees off target before a room is flagged
+ignore_below: 12         # setpoints under this are frost protection
+exclude: []
+```
+
+---
+
+## Kitchen Card
+
+Tonight's dinner, the week's meal plan and the shopping list. Mealie meal-plan calendars are found automatically; the list is any to-do entity (Grocy, Mealie, Shopping List, Bring!…) — tick items off, add new ones, clear the done ones. **Print** sends the open items to a receipt printer through a script.
+
+```yaml
+type: custom:kitchen-card
+meal_calendars: [calendar.mealie_dinner, calendar.mealie_side]   # default: every Mealie calendar
+shopping_list: todo.grocy_shopping_list                          # default: first Grocy / Mealie / Shopping List to-do
+print_action: script.print_receipt                               # gets the text in its `message` field
+print_meals: false                                               # also print the week's dinners
+```
+
+---
+
+## Bin Day Card
+
+The next pickup from [Waste Collection Schedule](https://github.com/mampfes/hacs_waste_collection_schedule) with icons for each bin, turning amber with **Put the bins out tonight** the evening before, then the next few pickups. WCS sensors are found automatically; a WCS calendar works too.
+
+```yaml
+type: custom:bin-day-card
+highlight_from: 16       # hour the day before when the reminder starts
+upcoming: 3              # later pickups listed
+types:                   # optional overrides, matched by text in the pickup name
+  - match: garbage
+    name: Garbage
+    icon: mdi:trash-can
+    color: '#78909c'
+```
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.

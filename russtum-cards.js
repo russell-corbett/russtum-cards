@@ -7762,4 +7762,954 @@ class RoomOverviewCardEditor extends window.RusstumEditor {
 customElements.define('room-overview-card-editor', RoomOverviewCardEditor);
 })();
 
-console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer · Media · Security · Parcels · Flights · EV · Batteries · Komodo · Services · HA Health · Rooms ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');
+// ═══ src/climate-overview-card.js ═══
+(() => {
+/**
+ * Climate Overview Card for Home Assistant
+ *
+ * Every thermostat in the house (or one floor) on one compact card: each
+ * room's temperature against its setpoint, colour-coded when it's well over
+ * or under, a flame while it's heating, and rooms grouped by floor.
+ * Thermostats are found automatically and grouped using HA's floors and areas.
+ *
+ * Configuration:
+ *   type: custom:climate-overview-card
+ *   title: Climate                  # Optional (defaults to the floor's name)
+ *   integration: mysa               # Optional: only thermostats from this integration
+ *   floor: main_floor               # Optional: just this floor (HA floor id)
+ *   exclude: [climate.garage_thermostat]
+ *   entities:                       # Optional: pick thermostats by hand instead
+ *     - entity: climate.family_room_thermostat
+ *       name: Family Room
+ *   tolerance: 1.5                  # °C (or °F) off target before a room turns red/blue
+ *   ignore_below: 12                # Setpoints under this are frost protection — never flagged hot (default 12)
+ *   columns: 3                      # Optional: tiles per row (default: as many as fit)
+ *   hide_off: false                 # Hide thermostats that are off
+ *   hide_summary: false             # Hide the heating count / furthest-off room line
+ */
+
+const CO_ORDER = { upstairs: 0, main_floor: 1, basement: 2 };
+const coEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const coList = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+
+class ClimateOverviewCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+    this._pending = {};
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error('Invalid configuration');
+    this._config = {
+      tolerance: 1.5, ...config,
+      exclude: coList(config.exclude),
+      entities: coList(config.entities).map((e) => (typeof e === 'string' ? { entity: e } : e)).filter((e) => e?.entity),
+    };
+    this._resolvedFor = null;
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) this._resolve();
+    else if (old && !this._ids.some((id) => hass.states[id] !== old.states[id])) return;
+    for (const [id, v] of Object.entries(this._pending)) {
+      if (!id.endsWith(':t') && Number(hass.states[id]?.attributes?.temperature) === v && !this._pending[`${id}:t`]) delete this._pending[id];
+    }
+    this._render();
+  }
+
+  // Work out which thermostats to show and which floor each belongs to.
+  _resolve() {
+    const h = this._hass, c = this._config;
+    this._resolvedFor = h.entities;
+    const reg = h.entities || {};
+    let ids;
+    if (c.entities.length) ids = c.entities.map((e) => e.entity);
+    else {
+      ids = Object.keys(h.states).filter((id) => id.startsWith('climate.')
+        && (!c.integration || reg[id]?.platform === c.integration)
+        && h.states[id].attributes.current_temperature != null
+        && !reg[id]?.hidden && !reg[id]?.entity_category);
+    }
+    ids = ids.filter((id) => !c.exclude.includes(id));
+
+    const floors = h.floors || {};
+    const areaOf = (id) => reg[id]?.area_id || h.devices?.[reg[id]?.device_id]?.area_id || null;
+    this._rooms = ids.map((id) => {
+      const area = areaOf(id);
+      const floorId = area ? h.areas?.[area]?.floor_id || null : null;
+      return { id, area, floorId };
+    }).filter((r) => !c.floor || r.floorId === c.floor);
+    this._ids = this._rooms.map((r) => r.id);
+
+    // Floors in building order: HA floor level (top first), then a sensible default.
+    const levelOf = (f) => (floors[f]?.level != null ? -floors[f].level : CO_ORDER[f] ?? 50);
+    this._floorOrder = [...new Set(this._rooms.map((r) => r.floorId))]
+      .sort((a, b) => (a == null) - (b == null) || levelOf(a) - levelOf(b));
+  }
+
+  _name(id) {
+    const custom = this._config.entities.find((e) => e.entity === id)?.name;
+    if (custom) return custom;
+    const s = this._hass.states[id];
+    return String(s?.attributes?.friendly_name || id).replace(/\s*(thermostat|climate|heater|heating)$/i, '').trim() || id;
+  }
+
+  _room(r) {
+    const s = this._hass.states[r.id];
+    const tol = Number(this._config.tolerance) || 1.5;
+    if (!s || s.state === 'unavailable') {
+      return { ...r, name: this._name(r.id), html: `<div class="room na" data-act="more" data-e="${coEsc(r.id)}">
+        <div class="rn">${coEsc(this._name(r.id))}</div><div class="rt">—</div><div class="rs">Offline</div></div>` };
+    }
+    const a = s.attributes;
+    const off = s.state === 'off';
+    const cur = a.current_temperature != null ? Number(a.current_temperature) : null;
+    const target = this._pending[r.id] ?? (a.temperature != null ? Number(a.temperature) : null);
+    const heating = a.hvac_action === 'heating', cooling = a.hvac_action === 'cooling';
+    const delta = !off && cur != null && target != null ? Math.round((cur - target) * 10) / 10 : null;
+    // A low setpoint is frost protection (a garage at 5°): being warmer than that isn't a problem.
+    const frost = target != null && target < (Number(this._config.ignore_below ?? 12));
+    const band = delta == null ? '' : delta >= tol && !frost ? 'hot' : delta <= -tol ? 'cold' : 'ok';
+    const step = a.target_temp_step || 0.5;
+    const unit = (a.temperature_unit || this._hass.config?.unit_system?.temperature || '°').replace(/[CF]$/, '');
+    const hum = a.current_humidity != null ? Math.round(a.current_humidity) : null;
+    const fmt = (v) => (v == null ? '—' : v.toFixed(1));
+    const html = `
+      <div class="room ${band} ${off ? 'off' : ''} ${heating ? 'heating' : ''} ${cooling ? 'cooling' : ''}" data-act="more" data-e="${coEsc(r.id)}"
+           title="${coEsc(this._name(r.id))}${delta != null ? ` · ${delta > 0 ? '+' : ''}${delta}° from target` : ''}">
+        <div class="rh">
+          <span class="rn">${coEsc(this._name(r.id))}</span>
+          ${heating ? '<ha-icon class="flame" icon="mdi:fire"></ha-icon>' : cooling ? '<ha-icon class="flake" icon="mdi:snowflake"></ha-icon>' : ''}
+        </div>
+        <div class="rt">${fmt(cur)}<small>${unit}</small></div>
+        <div class="rs">
+          ${off ? `<span>Off</span>${hum != null ? `<span class="hum">${hum}%</span>` : ''}`
+            : `<span class="set">
+                 <button data-act="temp" data-e="${coEsc(r.id)}" data-d="${-step}" title="Lower">−</button>
+                 <b class="${this._pending[r.id] != null ? 'pend' : ''}">${target != null ? target.toFixed(step < 1 ? 1 : 0) : '—'}°</b>
+                 <button data-act="temp" data-e="${coEsc(r.id)}" data-d="${step}" title="Raise">+</button>
+               </span>
+               ${delta != null && band !== 'ok' ? `<span class="delta">${delta > 0 ? '+' : ''}${delta.toFixed(1)}°</span>` : ''}`}
+        </div>
+      </div>`;
+    return { ...r, name: this._name(r.id), html, cur, delta: band === 'ok' ? 0 : delta, heating, off };
+  }
+
+  _render() {
+    if (!this._config) return;
+    if (!this._hass) { this.shadowRoot.innerHTML = '<ha-card></ha-card>'; return; }
+    if (this._resolvedFor !== this._hass.entities) this._resolve();
+    const c = this._config;
+    const rooms = this._rooms.map((r) => this._room(r)).filter((r) => !c.hide_off || !r.off);
+    const floors = this._hass.floors || {};
+    const floorName = (f) => floors[f]?.name || (f ? f.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase()) : 'Other');
+    const groups = this._floorOrder.map((f) => ({ f, rooms: rooms.filter((r) => r.floorId === f) })).filter((g) => g.rooms.length);
+    const single = groups.length <= 1;
+    const title = c.title ?? (c.floor ? floorName(c.floor) : 'Climate');
+
+    // Summary: how many are heating, plus the room furthest from its target.
+    const on = rooms.filter((r) => !r.off && r.cur != null);
+    const heatingN = rooms.filter((r) => r.heating).length;
+    const avg = on.length ? on.reduce((t, r) => t + r.cur, 0) / on.length : null;
+    const worst = rooms.filter((r) => r.delta != null && Math.abs(r.delta) >= (Number(c.tolerance) || 1.5))
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
+    const summary = [
+      heatingN ? `<span class="heat"><ha-icon icon="mdi:fire"></ha-icon>${heatingN} heating</span>` : '<span>None heating</span>',
+      avg != null ? `<span>Avg ${avg.toFixed(1)}°</span>` : '',
+      worst ? `<span class="${worst.delta > 0 ? 'hotc' : 'coldc'}" data-act="more" data-e="${coEsc(worst.id)}">${coEsc(worst.name)} ${worst.delta > 0 ? '+' : ''}${worst.delta.toFixed(1)}°</span>` : '',
+    ].filter(Boolean).join('');
+
+    const cols = Number(c.columns) > 0 ? `repeat(${Number(c.columns)}, minmax(0, 1fr))` : 'repeat(auto-fill, minmax(118px, 1fr))';
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 12px; }
+        .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 2px 10px; }
+        .title { font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); margin-right: auto; }
+        .sum { display: flex; gap: 10px; flex-wrap: wrap; font-size: .8em; color: var(--secondary-text-color); --mdc-icon-size: 14px; }
+        .sum span { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+        .sum .heat { color: var(--state-climate-heat-color, #ff8100); font-weight: 600; }
+        .sum .hotc { color: var(--error-color, #f44336); font-weight: 600; cursor: pointer; }
+        .sum .coldc { color: var(--info-color, #2196f3); font-weight: 600; cursor: pointer; }
+        .floor { font-size: .72em; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--secondary-text-color); margin: 12px 2px 6px; }
+        .floor:first-of-type { margin-top: 0; }
+        .grid { display: grid; grid-template-columns: ${cols}; gap: 6px; }
+        .room { position: relative; padding: 8px 10px 7px; border-radius: 12px; cursor: pointer; min-width: 0; box-sizing: border-box;
+                background: var(--secondary-background-color, rgba(127,127,127,.08)); border: 1px solid transparent; }
+        .room:hover { border-color: rgba(127,127,127,.25); }
+        .rh { display: flex; align-items: center; gap: 4px; --mdc-icon-size: 14px; }
+        .rn { flex: 1; min-width: 0; font-size: .78em; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .flame { color: var(--state-climate-heat-color, #ff8100); animation: flick 1.6s ease-in-out infinite; }
+        .flake { color: var(--state-climate-cool-color, #2196f3); }
+        @keyframes flick { 50% { opacity: .55; } }
+        .rt { font-size: 1.45em; font-weight: 700; line-height: 1.2; color: var(--primary-text-color); font-variant-numeric: tabular-nums; margin: 2px 0 1px; }
+        .rt small { font-size: .5em; font-weight: 500; color: var(--secondary-text-color); margin-left: 1px; }
+        .rs { display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: .74em; color: var(--secondary-text-color); min-height: 22px; }
+        .set { display: inline-flex; align-items: center; border-radius: 8px; background: rgba(127,127,127,.12); }
+        .set button { width: 20px; height: 22px; border: none; background: none; cursor: pointer; color: var(--secondary-text-color); font-size: 1.15em; line-height: 1; padding: 0; border-radius: 6px; }
+        .set button:hover { color: var(--primary-text-color); background: rgba(127,127,127,.2); }
+        .set b { min-width: 30px; text-align: center; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+        .set b.pend { color: var(--primary-color, #03a9f4); }
+        .delta { font-weight: 700; }
+
+        .room.heating { background: linear-gradient(0deg, rgba(255,129,0,.10), rgba(255,129,0,.10)), var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .room.hot { border-color: rgba(244,67,54,.45); background: linear-gradient(0deg, rgba(244,67,54,.12), rgba(244,67,54,.12)), var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .room.hot .rt, .room.hot .delta { color: var(--error-color, #f44336); }
+        .room.cold { border-color: rgba(33,150,243,.45); background: linear-gradient(0deg, rgba(33,150,243,.12), rgba(33,150,243,.12)), var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .room.cold .rt, .room.cold .delta { color: var(--info-color, #2196f3); }
+        .room.off .rt { color: var(--secondary-text-color); font-weight: 600; }
+        .room.na { opacity: .5; }
+        .empty { padding: 12px 2px; color: var(--secondary-text-color); font-size: .9em; }
+      </style>
+      <ha-card>
+        ${title || (!c.hide_summary && rooms.length) ? `<div class="head">${title ? `<div class="title">${coEsc(title)}</div>` : ''}${!c.hide_summary && rooms.length ? `<div class="sum">${summary}</div>` : ''}</div>` : ''}
+        ${!rooms.length ? '<div class="empty">No thermostats found.</div>' : ''}
+        ${groups.map((g) => `${single ? '' : `<div class="floor">${coEsc(floorName(g.f))}</div>`}<div class="grid">${g.rooms.map((r) => r.html).join('')}</div>`).join('')}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    if (!el || !this._hass) return;
+    ev.stopPropagation();
+    const id = el.dataset.e;
+    if (el.dataset.act === 'more') {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: id }, bubbles: true, composed: true }));
+    } else if (el.dataset.act === 'temp') {
+      // Batch quick taps into one service call.
+      const a = this._hass.states[id].attributes;
+      const cur = this._pending[id] ?? Number(a.temperature);
+      this._pending[id] = Math.min(a.max_temp ?? 35, Math.max(a.min_temp ?? 5, Math.round((cur + Number(el.dataset.d)) * 10) / 10));
+      clearTimeout(this._pending[`${id}:t`]);
+      this._pending[`${id}:t`] = setTimeout(() => {
+        delete this._pending[`${id}:t`];
+        this._hass.callService('climate', 'set_temperature', { entity_id: id, temperature: this._pending[id] });
+        setTimeout(() => { delete this._pending[id]; this._lastHtml = null; this._render(); }, 8000);
+      }, 900);
+      this._render();
+    }
+  }
+
+  getCardSize() { return 1 + Math.ceil((this._ids?.length || 6) / 3) * 2; }
+
+  getGridOptions() { return { columns: 12, min_columns: 4 }; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('climate-overview-card-editor');
+  }
+
+  static getStubConfig() { return { title: 'Climate' }; }
+}
+
+customElements.define('climate-overview-card', ClimateOverviewCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'climate-overview-card',
+  name: 'Climate Overview Card',
+  description: 'Every thermostat at a glance, by floor: temperature vs setpoint, heating, and rooms too hot or cold.',
+  preview: false,
+});
+
+class ClimateOverviewCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:thermostat', schema: [
+        f.text('title', 'Title', 'Default: the floor name, or "Climate"'),
+        f.grid(
+          { name: 'floor', label: 'Floor', helper: 'Default: every floor', selector: { floor: {} } },
+          { name: 'integration', label: 'Integration', helper: 'Only thermostats from this integration', selector: { text: {} } },
+        ),
+        f.grid(
+          f.number('tolerance', 'Flag rooms off target by', { min: 0.5, step: 0.5, unit: '°', helper: 'Default: 1.5' }),
+          f.number('columns', 'Tiles per row', { min: 1, max: 8, helper: 'Default: as many as fit' }),
+        ),
+        f.number('ignore_below', 'Never flag hot when the setpoint is under', { min: 0, max: 30, unit: '°', helper: 'Frost-protection setpoints. Default: 12' }),
+        f.grid(f.toggle('hide_off', 'Hide thermostats that are off'), f.toggle('hide_summary', 'Hide the summary line')),
+        f.entities('exclude', 'Hide thermostats', '', 'climate'),
+      ] },
+      { title: 'Pick thermostats by hand', icon: 'mdi:format-list-checks', open: false, list: {
+        key: 'entities',
+        schema: [f.grid(f.entity('entity', 'Thermostat', '', 'climate'), f.text('name', 'Name'))],
+        label: (e, i) => e.name || e.entity || `Thermostat ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add thermostat',
+      } },
+    ];
+  }
+}
+
+customElements.define('climate-overview-card-editor', ClimateOverviewCardEditor);
+})();
+
+// ═══ src/kitchen-card.js ═══
+(() => {
+/**
+ * Kitchen Card for Home Assistant
+ *
+ * Tonight's dinner, the week's meal plan and the shopping list in one card.
+ *   • Meals come from meal-plan calendars — Mealie's are found automatically
+ *     (calendar.mealie_dinner, _lunch, _side…).
+ *   • The shopping list is any to-do list: Grocy, Mealie, HA's Shopping List,
+ *     Bring!… Tick items off, add new ones, clear the done ones.
+ *   • Print sends the list to a receipt printer through a script or action
+ *     (e.g. script.print_receipt with a `message` field).
+ *
+ * Configuration:
+ *   type: custom:kitchen-card
+ *   title: Kitchen                         # Optional
+ *   meal_calendars:                        # Optional: default = every Mealie calendar
+ *     - calendar.mealie_dinner
+ *   tonight_calendar: calendar.mealie_dinner   # Optional: which one is "tonight" (default: the dinner one)
+ *   days: 7                                # Days of plan shown (default 7, 0 hides the week)
+ *   shopping_list: todo.grocy_shopping_list    # Optional: default = first Grocy / Mealie / Shopping List to-do
+ *   show_completed: false                  # Keep ticked items in the list (default false)
+ *   print_action: script.print_receipt     # Optional: shows a Print button
+ *   print_field: message                   # Field the text goes in (default: message)
+ *   print_meals: false                     # Also print the week's dinners above the list
+ */
+
+const KC_LIST_PLATFORMS = ['grocy', 'mealie', 'shopping_list', 'bring', 'todoist', 'local_todo'];
+const kcEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const kcDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+const kcDate = (v) => {
+  if (!v) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(v);
+};
+
+class KitchenCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+    this.shadowRoot.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target.matches('input.add')) this._addItem(ev.target); });
+    this._meals = [];
+    this._items = null;
+    this._printState = '';
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error('Invalid configuration');
+    const list = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+    this._config = { days: 7, print_field: 'message', ...config, meal_calendars: list(config.meal_calendars) };
+    this._resolvedFor = null;
+    this._mealsFetched = 0;
+    this._unsubscribe();
+    this._lastHtml = null;
+    this._render();
+  }
+
+  connectedCallback() {
+    this._clock = setInterval(() => { this._mealsFetched = 0; if (this._hass) this._fetchMeals(); }, 1800000);
+    if (this._hass && this._listId && !this._unsub) this._subscribe();
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._clock);
+    this._unsubscribe();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) this._resolve();
+    const changed = !old || this._calIds.some((id) => hass.states[id] !== old.states[id]);
+    if (changed || Date.now() - this._mealsFetched > 1800000) this._fetchMeals();
+    if (this._listId && !this._unsub && this.isConnected) this._subscribe();
+    if (old && !changed && hass.states[this._listId] === old.states[this._listId]) return;
+    this._render();
+  }
+
+  _resolve() {
+    const h = this._hass, c = this._config, reg = h.entities || {};
+    this._resolvedFor = h.entities;
+    this._calIds = c.meal_calendars.length ? c.meal_calendars
+      : Object.keys(h.states).filter((id) => id.startsWith('calendar.') && reg[id]?.platform === 'mealie');
+    this._tonightId = c.tonight_calendar || this._calIds.find((id) => /dinner|supper/i.test(id)) || this._calIds[0];
+    const listId = c.shopping_list || KC_LIST_PLATFORMS.map((p) => Object.keys(h.states).find((id) => id.startsWith('todo.') && reg[id]?.platform === p)).find(Boolean);
+    if (listId !== this._listId) { this._unsubscribe(); this._listId = listId; this._items = null; }
+  }
+
+  // ── Data ─────────────────────────────────────────────────────────────────
+  async _fetchMeals() {
+    this._mealsFetched = Date.now();
+    if (!this._calIds.length) return;
+    const start = kcDay(new Date());
+    const end = new Date(start.getTime() + Math.max(1, Number(this._config.days) || 1) * 86400000);
+    const q = `start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
+    const results = await Promise.all(this._calIds.map(async (id) => {
+      try {
+        const evs = await this._hass.callApi('GET', `calendars/${id}?${q}`);
+        const kind = String(this._hass.states[id]?.attributes?.friendly_name || id).replace(/^mealie\s*/i, '').replace(/^calendar\.\w*?_/, '');
+        return (evs || []).map((e) => ({ cal: id, kind, title: e.summary || '', desc: e.description || '', date: kcDay(kcDate(e.start?.date || e.start?.dateTime)) }));
+      } catch (e) { return []; }
+    }));
+    this._meals = results.flat().filter((m) => m.date && !isNaN(m.date));
+    this._lastHtml = null;
+    this._render();
+  }
+
+  _subscribe() {
+    const id = this._listId;
+    if (!id || !this._hass?.connection) return;
+    this._unsub = this._hass.connection.subscribeMessage((msg) => {
+      this._items = msg.items || [];
+      this._lastHtml = null;
+      this._render();
+    }, { type: 'todo/item/subscribe', entity_id: id }).catch(async () => {
+      // Older HA: no subscription — fetch once (re-fetched when the list's count changes).
+      this._unsub = null;
+      try { this._items = (await this._hass.callWS({ type: 'todo/item/list', entity_id: id })).items || []; } catch (e) { this._items = []; }
+      this._render();
+    });
+  }
+
+  _unsubscribe() {
+    if (this._unsub) { Promise.resolve(this._unsub).then((u) => typeof u === 'function' && u()).catch(() => {}); }
+    this._unsub = null;
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  _render() {
+    if (!this._config) return;
+    if (!this._hass) { this.shadowRoot.innerHTML = '<ha-card></ha-card>'; return; }
+    if (this._resolvedFor !== this._hass.entities) this._resolve();
+    const c = this._config;
+    const today = kcDay(new Date());
+    const dayN = (d) => Math.round((d - today) / 86400000);
+    const dayLabel = (d) => { const n = dayN(d); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : d.toLocaleDateString(undefined, { weekday: 'short' }); };
+
+    const tonight = this._meals.filter((m) => m.cal === this._tonightId && dayN(m.date) === 0);
+    const sides = this._meals.filter((m) => m.cal !== this._tonightId && dayN(m.date) === 0 && /side|dessert|drink/i.test(m.kind));
+
+    // Week: one row per day after today, the "tonight" calendar's meal first.
+    const days = Math.max(0, Number(c.days) || 0);
+    const week = [];
+    for (let i = 1; i < days; i++) {
+      const d = new Date(today.getTime() + i * 86400000);
+      const meals = this._meals.filter((m) => dayN(m.date) === i)
+        .sort((a, b) => (b.cal === this._tonightId) - (a.cal === this._tonightId));
+      week.push({ d, meals });
+    }
+    const weekHasAny = week.some((w) => w.meals.length);
+
+    const items = (this._items || []).filter((it) => c.show_completed || it.status !== 'completed');
+    const doneN = (this._items || []).filter((it) => it.status === 'completed').length;
+    const open = (this._items || []).filter((it) => it.status !== 'completed');
+    const listName = this._listId ? String(this._hass.states[this._listId]?.attributes?.friendly_name || 'Shopping list') : '';
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 14px; }
+        .title { font-size: 1.05em; font-weight: 600; color: var(--primary-text-color); margin: 0 2px 10px; display: flex; align-items: center; gap: 8px; }
+        .title span { flex: 1; }
+        .hero { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; cursor: pointer;
+                background: linear-gradient(135deg, rgba(255,152,0,.18), rgba(244,67,54,.10)); }
+        .hero.none { background: var(--secondary-background-color, rgba(127,127,127,.08)); }
+        .hi { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; --mdc-icon-size: 24px;
+              background: rgba(255,152,0,.22); color: #ff9800; }
+        .none .hi { background: rgba(127,127,127,.15); color: var(--secondary-text-color); }
+        .hk { font-size: .72em; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--secondary-text-color); }
+        .hn { font-size: 1.15em; font-weight: 700; color: var(--primary-text-color); line-height: 1.25; }
+        .none .hn { font-size: .95em; font-weight: 500; color: var(--secondary-text-color); }
+        .hd { font-size: .8em; color: var(--secondary-text-color); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .ht { flex: 1; min-width: 0; }
+
+        .sec { font-size: .72em; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--secondary-text-color);
+               margin: 14px 2px 6px; display: flex; align-items: center; gap: 8px; }
+        .sec span { flex: 1; }
+        .week { display: flex; flex-direction: column; gap: 2px; }
+        .wd { display: flex; align-items: baseline; gap: 10px; padding: 5px 4px; border-radius: 8px; font-size: .88em; cursor: pointer; }
+        .wd:hover { background: rgba(127,127,127,.08); }
+        .wd .d { width: 72px; flex-shrink: 0; color: var(--secondary-text-color); font-weight: 500; }
+        .wd .m { flex: 1; min-width: 0; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .wd .m i { font-style: normal; color: var(--secondary-text-color); font-size: .9em; }
+        .wd.empty .m { color: var(--secondary-text-color); opacity: .7; }
+
+        .btn { display: inline-flex; align-items: center; gap: 4px; border: none; cursor: pointer; border-radius: 14px; padding: 4px 10px;
+               font: inherit; font-size: .95em; text-transform: none; letter-spacing: 0; font-weight: 600; --mdc-icon-size: 15px;
+               background: rgba(127,127,127,.14); color: var(--primary-text-color); }
+        .btn:hover { background: rgba(127,127,127,.24); }
+        .btn.primary { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+        .btn.ok { background: var(--success-color, #4caf50); color: #fff; }
+        .btn.err { background: var(--error-color, #f44336); color: #fff; }
+        .btn[disabled] { opacity: .5; cursor: default; }
+        .list { display: flex; flex-direction: column; }
+        .it { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 8px; cursor: pointer; font-size: .9em; color: var(--primary-text-color); }
+        .it:hover { background: rgba(127,127,127,.08); }
+        .box { width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--secondary-text-color); flex-shrink: 0; box-sizing: border-box;
+               display: flex; align-items: center; justify-content: center; --mdc-icon-size: 14px; color: #fff; }
+        .it.done { color: var(--secondary-text-color); text-decoration: line-through; }
+        .it.done .box { background: var(--primary-color, #03a9f4); border-color: var(--primary-color, #03a9f4); }
+        .it .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .it .q { font-size: .85em; color: var(--secondary-text-color); white-space: nowrap; }
+        .addrow { display: flex; gap: 6px; margin-top: 6px; }
+        input.add { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--divider-color, rgba(127,127,127,.3));
+                    background: var(--card-background-color, transparent); color: var(--primary-text-color); font: inherit; font-size: .9em; outline: none; }
+        input.add:focus { border-color: var(--primary-color, #03a9f4); }
+        .muted { color: var(--secondary-text-color); font-size: .85em; padding: 4px; }
+      </style>
+      <ha-card>
+        ${c.title ? `<div class="title"><span>${kcEsc(c.title)}</span></div>` : ''}
+
+        ${this._calIds.length ? `
+          <div class="hero ${tonight.length ? '' : 'none'}" data-act="more" data-e="${kcEsc(this._tonightId || '')}">
+            <div class="hi"><ha-icon icon="${tonight.length ? 'mdi:silverware-fork-knife' : 'mdi:silverware-variant'}"></ha-icon></div>
+            <div class="ht">
+              <div class="hk">Tonight</div>
+              ${tonight.length
+                ? `<div class="hn">${tonight.map((m) => kcEsc(m.title)).join(' &amp; ')}</div>
+                   ${sides.length ? `<div class="hd">with ${sides.map((m) => kcEsc(m.title)).join(', ')}</div>`
+                     : tonight[0].desc ? `<div class="hd">${kcEsc(tonight[0].desc)}</div>` : ''}`
+                : '<div class="hn">Nothing planned yet</div>'}
+            </div>
+          </div>
+          ${days > 1 ? `
+            <div class="sec"><span>This week</span></div>
+            <div class="week">
+              ${weekHasAny ? week.map((w) => `
+                <div class="wd ${w.meals.length ? '' : 'empty'}" data-act="more" data-e="${kcEsc(w.meals[0]?.cal || this._tonightId || '')}">
+                  <span class="d">${dayLabel(w.d)}</span>
+                  <span class="m">${w.meals.length
+                    ? w.meals.map((m, i) => (i === 0 && m.cal === this._tonightId ? kcEsc(m.title) : `<i>${kcEsc(m.kind)}:</i> ${kcEsc(m.title)}`)).join(' · ')
+                    : '—'}</span>
+                </div>`).join('') : '<div class="muted">Nothing planned for the rest of the week.</div>'}
+            </div>` : ''}` : ''}
+
+        ${this._listId ? `
+          <div class="sec">
+            <span>${kcEsc(listName)}${open.length ? ` · ${open.length}` : ''}</span>
+            ${doneN ? `<button class="btn" data-act="clear" title="Remove ticked items"><ha-icon icon="mdi:broom"></ha-icon>Clear ${doneN}</button>` : ''}
+            ${c.print_action ? `<button class="btn ${this._printState === 'ok' ? 'ok' : this._printState === 'err' ? 'err' : 'primary'}" data-act="print" ${open.length && this._printState !== 'busy' ? '' : 'disabled'}>
+              <ha-icon icon="${this._printState === 'ok' ? 'mdi:check' : this._printState === 'err' ? 'mdi:alert' : 'mdi:printer-pos'}"></ha-icon>${this._printState === 'ok' ? 'Printed' : this._printState === 'err' ? 'Failed' : 'Print'}</button>` : ''}
+          </div>
+          <div class="list">
+            ${this._items == null ? '<div class="muted">Loading…</div>'
+              : !items.length ? '<div class="muted">The list is empty.</div>'
+              : items.map((it) => `
+                <div class="it ${it.status === 'completed' ? 'done' : ''}" data-act="check" data-uid="${kcEsc(it.uid)}" data-s="${it.status}">
+                  <span class="box">${it.status === 'completed' ? '<ha-icon icon="mdi:check"></ha-icon>' : ''}</span>
+                  <span class="n">${kcEsc(it.summary)}</span>
+                  ${it.description ? `<span class="q">${kcEsc(it.description)}</span>` : ''}
+                </div>`).join('')}
+          </div>
+          <div class="addrow"><input class="add" type="text" placeholder="Add an item" enterkeyhint="done"></div>
+        ` : ''}
+
+        ${!this._calIds.length && !this._listId ? '<div class="muted">No meal-plan calendars or shopping list found. Set <code>meal_calendars</code> or <code>shopping_list</code>.</div>' : ''}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    // Keep whatever's being typed in the add box across re-renders.
+    const input = this.shadowRoot.querySelector('input.add');
+    const typed = input?.value, focused = input && this.shadowRoot.activeElement === input;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+    const ni = this.shadowRoot.querySelector('input.add');
+    if (ni && typed) ni.value = typed;
+    if (ni && focused) ni.focus();
+  }
+
+  // ── Actions ──────────────────────────────────────────────────────────────
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    if (!el || !this._hass) return;
+    const act = el.dataset.act;
+    if (act === 'more' && el.dataset.e) {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+    } else if (act === 'check') {
+      const done = el.dataset.s === 'completed';
+      this._hass.callService('todo', 'update_item', { item: el.dataset.uid, status: done ? 'needs_action' : 'completed' }, { entity_id: this._listId });
+      // Optimistic: flip it now, the subscription confirms it.
+      const it = (this._items || []).find((i) => i.uid === el.dataset.uid);
+      if (it) { it.status = done ? 'needs_action' : 'completed'; this._lastHtml = null; this._render(); }
+    } else if (act === 'clear') {
+      this._hass.callService('todo', 'remove_completed_items', {}, { entity_id: this._listId });
+    } else if (act === 'print') {
+      this._print();
+    }
+  }
+
+  _addItem(input) {
+    const v = input.value.trim();
+    if (!v || !this._listId) return;
+    input.value = '';   // clear first: the list update re-renders and keeps whatever is typed
+    this._hass.callService('todo', 'add_item', { item: v }, { entity_id: this._listId });
+  }
+
+  // Plain text for an ~48-column receipt.
+  _printText() {
+    const c = this._config;
+    const W = 48;
+    const now = new Date();
+    const lines = ['SHOPPING LIST', now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }), '-'.repeat(W)];
+    if (c.print_meals) {
+      const today = kcDay(now);
+      const dinners = this._meals.filter((m) => m.cal === this._tonightId).sort((a, b) => a.date - b.date);
+      if (dinners.length) {
+        lines.push('MEALS');
+        for (const m of dinners) {
+          const n = Math.round((m.date - today) / 86400000);
+          const d = (n === 0 ? 'Tonight' : m.date.toLocaleDateString(undefined, { weekday: 'short' })).padEnd(8);
+          lines.push(`${d}${m.title}`.slice(0, W));
+        }
+        lines.push('-'.repeat(W));
+      }
+    }
+    for (const it of (this._items || []).filter((i) => i.status !== 'completed')) {
+      const q = it.description ? ` (${it.description})` : '';
+      lines.push(`[ ] ${it.summary}${q}`.slice(0, W));
+    }
+    return lines.join('\n');
+  }
+
+  async _print() {
+    const c = this._config;
+    const [domain, service] = String(c.print_action).split('.');
+    if (!domain || !service) return;
+    this._printState = 'busy'; this._lastHtml = null; this._render();
+    try {
+      await this._hass.callService(domain, service, { [c.print_field || 'message']: this._printText() });
+      this._printState = 'ok';
+    } catch (e) {
+      this._printState = 'err';
+    }
+    this._lastHtml = null; this._render();
+    setTimeout(() => { this._printState = ''; this._lastHtml = null; this._render(); }, 3000);
+  }
+
+  getCardSize() { return 4 + Math.min(6, (this._items || []).length / 2); }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('kitchen-card-editor');
+  }
+
+  static getStubConfig() { return {}; }
+}
+
+customElements.define('kitchen-card', KitchenCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'kitchen-card',
+  name: 'Kitchen Card',
+  description: "Tonight's dinner, the week's meal plan and a printable shopping list.",
+  preview: false,
+});
+
+class KitchenCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'Meals', icon: 'mdi:silverware-fork-knife', schema: [
+        f.text('title', 'Title'),
+        f.entities('meal_calendars', 'Meal-plan calendars', 'Default: every Mealie calendar', 'calendar'),
+        f.grid(
+          f.entity('tonight_calendar', '"Tonight" calendar', 'Default: the dinner one', 'calendar'),
+          f.number('days', 'Days shown', { min: 0, max: 14, helper: 'Default: 7' }),
+        ),
+      ] },
+      { title: 'Shopping list', icon: 'mdi:cart', schema: [
+        f.entity('shopping_list', 'To-do list', 'Default: Grocy, Mealie or Shopping List', 'todo'),
+        f.toggle('show_completed', 'Keep ticked items in the list'),
+        f.grid(
+          f.entity('print_action', 'Print with', 'A script, e.g. script.print_receipt', 'script'),
+          f.text('print_field', 'Text field', 'Default: message'),
+        ),
+        f.toggle('print_meals', "Print the week's dinners too"),
+      ] },
+    ];
+  }
+}
+
+customElements.define('kitchen-card-editor', KitchenCardEditor);
+})();
+
+// ═══ src/bin-day-card.js ═══
+(() => {
+/**
+ * Bin Day Card for Home Assistant
+ *
+ * The next pickup from Waste Collection Schedule: which bins, how soon, and a
+ * "Put the bins out tonight" highlight the evening before. Upcoming pickups
+ * follow as a short list. Waste Collection Schedule sensors are found
+ * automatically.
+ *
+ * Works with either:
+ *   • WCS sensors whose attributes list upcoming dates (the default
+ *     `details_format: upcoming`), or
+ *   • a WCS calendar entity (`calendar:`), read through HA's calendar API.
+ *
+ * Configuration:
+ *   type: custom:bin-day-card
+ *   title: Bins                       # Optional
+ *   entities:                         # Optional: default = every WCS sensor
+ *     - sensor.waste_collection_schedule_automated_garbage_collection
+ *   calendar: calendar.waste_collection_schedule_curbit_st_john_s   # Optional instead of sensors
+ *   highlight_from: 16                # Hour the day before when "put out tonight" starts (default 16)
+ *   upcoming: 3                       # Later pickups listed under the next one (default 3, 0 hides)
+ *   types:                            # Optional: rename / recolour bin types (matched by text)
+ *     - match: garbage
+ *       name: Garbage
+ *       icon: mdi:trash-can
+ *       color: '#78909c'
+ */
+
+// Built-in bin styles, matched against the pickup's name.
+const BD_TYPES = [
+  { match: /recycl|blue/i, name: 'Recycling', icon: 'mdi:recycle', color: '#2196f3' },
+  { match: /yard|garden|green|leaf|compost|organic|food|bio/i, name: 'Yard waste', icon: 'mdi:leaf', color: '#4caf50' },
+  { match: /glass/i, name: 'Glass', icon: 'mdi:bottle-wine', color: '#26a69a' },
+  { match: /paper|cardboard/i, name: 'Paper', icon: 'mdi:package-variant', color: '#8d6e63' },
+  { match: /bulk|large/i, name: 'Bulk', icon: 'mdi:sofa', color: '#ab47bc' },
+  { match: /hazard|battery|electronic/i, name: 'Hazardous', icon: 'mdi:biohazard', color: '#ff7043' },
+  { match: /garbage|trash|refuse|rubbish|waste|black|grey|gray/i, name: 'Garbage', icon: 'mdi:trash-can', color: '#78909c' },
+];
+
+const bdEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const bdDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+// 'YYYY-MM-DD' as a local date (new Date('2026-11-12') would be UTC midnight).
+const bdParse = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+
+class BinDayCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+    this._calEvents = [];
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error('Invalid configuration');
+    this._config = { highlight_from: 16, upcoming: 3, ...config,
+      entities: (Array.isArray(config.entities) ? config.entities : config.entities ? [config.entities] : []).map((e) => (typeof e === 'string' ? e : e?.entity)).filter(Boolean) };
+    this._resolvedFor = null;
+    this._calFetched = 0;
+    this._lastHtml = null;
+    this._render();
+  }
+
+  connectedCallback() {
+    // Re-render every 10 minutes so "tonight" / "today" roll over on their own.
+    this._clock = setInterval(() => { this._lastHtml = null; this._render(); }, 600000);
+  }
+
+  disconnectedCallback() { clearInterval(this._clock); }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._resolvedFor !== hass.entities) this._resolve();
+    else if (old && !this._ids.some((id) => hass.states[id] !== old.states[id])) return;
+    if (this._config.calendar && Date.now() - this._calFetched > 3600000) this._fetchCalendar();
+    this._render();
+  }
+
+  _resolve() {
+    const h = this._hass, c = this._config;
+    this._resolvedFor = h.entities;
+    const reg = h.entities || {};
+    this._ids = c.entities.length ? c.entities
+      : c.calendar ? []
+        : Object.keys(h.states).filter((id) => id.startsWith('sensor.') && reg[id]?.platform === 'waste_collection_schedule');
+    if (c.calendar) this._ids = [...this._ids, c.calendar];
+  }
+
+  async _fetchCalendar() {
+    this._calFetched = Date.now();
+    const start = bdDay(new Date());
+    const end = new Date(start.getTime() + 60 * 86400000);
+    try {
+      const evs = await this._hass.callApi('GET', `calendars/${this._config.calendar}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`);
+      this._calEvents = (evs || []).map((e) => ({ date: bdParse(e.start?.date || e.start?.dateTime || ''), name: e.summary || 'Pickup' })).filter((e) => e.date);
+    } catch (e) {
+      this._calEvents = [];
+    }
+    this._lastHtml = null;
+    this._render();
+  }
+
+  // Every upcoming pickup as { date, name }.
+  _pickups() {
+    const out = [];
+    for (const id of this._ids || []) {
+      if (id.startsWith('calendar.')) continue;
+      const s = this._hass.states[id];
+      if (!s) continue;
+      const name = String(s.attributes.friendly_name || id).replace(/^waste collection schedule\s*/i, '');
+      let found = false;
+      for (const [k, v] of Object.entries(s.attributes)) {
+        const d = bdParse(k);
+        if (d) { out.push({ date: d, name: typeof v === 'string' ? v : name }); found = true; }
+      }
+      // Fallback: a sensor with only a state ("Thu, 12.11.2026", "2026-11-12", "in 2 days").
+      if (!found) {
+        const st = s.state;
+        let d = bdParse(st);
+        const eu = /(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec(st);
+        if (!d && eu) d = new Date(+eu[3], +eu[2] - 1, +eu[1]);
+        const days = /^\d+$/.test(st) ? +st : null;
+        if (!d && days != null) d = new Date(bdDay(new Date()).getTime() + days * 86400000);
+        if (d) out.push({ date: d, name });
+      }
+    }
+    out.push(...this._calEvents);
+    const today = bdDay(new Date());
+    return out.filter((p) => p.date >= today);
+  }
+
+  _style(name) {
+    const custom = (this._config.types || []).find((t) => t?.match && String(name).toLowerCase().includes(String(t.match).toLowerCase()));
+    const base = BD_TYPES.find((t) => t.match.test(name)) || { name, icon: 'mdi:delete-variant', color: '#78909c' };
+    return { name: custom?.name || base.name, icon: custom?.icon || base.icon, color: custom?.color || base.color };
+  }
+
+  _render() {
+    if (!this._config) return;
+    if (!this._hass) { this.shadowRoot.innerHTML = '<ha-card></ha-card>'; return; }
+    if (this._resolvedFor !== this._hass.entities) this._resolve();
+    const c = this._config;
+
+    // Group pickups by day, de-duplicating bin types on the same day.
+    const byDay = new Map();
+    for (const p of this._pickups().sort((a, b) => a.date - b.date)) {
+      const k = p.date.getTime();
+      const st = this._style(p.name);
+      if (!byDay.has(k)) byDay.set(k, { date: p.date, bins: [] });
+      const day = byDay.get(k);
+      if (!day.bins.some((b) => b.name === st.name)) day.bins.push(st);
+    }
+    const days = [...byDay.values()];
+    const next = days[0];
+
+    const now = new Date();
+    const today = bdDay(now);
+    const diff = next ? Math.round((next.date - today) / 86400000) : null;
+    const tonight = diff === 1 && now.getHours() >= Number(c.highlight_from ?? 16);
+    const isToday = diff === 0;
+    const urgent = tonight || isToday;
+    const when = (d, n) => (n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n < 7 ? d.toLocaleDateString(undefined, { weekday: 'long' })
+      : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }));
+    const sub = !next ? '' : tonight ? 'Put the bins out tonight' : isToday ? 'Pickup is today'
+      : diff === 1 ? 'Out tomorrow evening' : `In ${diff} days · ${next.date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+    const later = days.slice(1, 1 + Math.max(0, Number(c.upcoming ?? 3)));
+
+    const html = `
+      <style>
+        :host { display: block; }
+        ha-card { padding: 12px 14px; overflow: hidden; }
+        ha-card.urgent { --acc: var(--warning-color, #ff9800);
+          box-shadow: 0 0 0 1.5px var(--acc) inset, var(--ha-card-box-shadow, none);
+          background: linear-gradient(color-mix(in srgb, var(--acc) 12%, transparent), color-mix(in srgb, var(--acc) 12%, transparent)),
+                      var(--ha-card-background, var(--card-background-color, #1c1c1c)); }
+        .main { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+        .bins { display: flex; flex-shrink: 0; }
+        .bin { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; --mdc-icon-size: 24px;
+               border: 2px solid var(--card-background-color, #1c1c1c); }
+        .bin + .bin { margin-left: -12px; }
+        .urgent .bin { animation: bob 2.4s ease-in-out infinite; }
+        .urgent .bin + .bin { animation-delay: .25s; }
+        @keyframes bob { 50% { transform: translateY(-3px); } }
+        .txt { flex: 1; min-width: 0; }
+        .t { font-size: .74em; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--secondary-text-color); }
+        .w { font-size: 1.25em; font-weight: 700; color: var(--primary-text-color); line-height: 1.25; }
+        .names { font-size: .85em; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .s { font-size: .8em; color: var(--secondary-text-color); margin-top: 1px; }
+        .urgent .s { color: var(--acc); font-weight: 700; }
+        .later { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--divider-color, rgba(127,127,127,.2)); }
+        .row { display: flex; align-items: center; gap: 8px; font-size: .82em; color: var(--secondary-text-color); }
+        .row .d { width: 92px; flex-shrink: 0; color: var(--primary-text-color); font-weight: 500; white-space: nowrap; }
+        .chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px 2px 5px; border-radius: 10px; font-size: .92em; --mdc-icon-size: 14px; white-space: nowrap; }
+        .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+        .empty { color: var(--secondary-text-color); font-size: .9em; padding: 4px 0; }
+      </style>
+      <ha-card class="${urgent ? 'urgent' : ''}">
+        ${!next ? `<div class="empty">${c.title ? `<b>${bdEsc(c.title)}</b> · ` : ''}No pickups scheduled.</div>` : `
+          <div class="main" data-act="more">
+            <div class="bins">${next.bins.map((b) => `<div class="bin" style="background:${b.color}33;color:${b.color}" title="${bdEsc(b.name)}"><ha-icon icon="${bdEsc(b.icon)}"></ha-icon></div>`).join('')}</div>
+            <div class="txt">
+              <div class="t">${bdEsc(c.title || 'Next pickup')}</div>
+              <div class="w">${when(next.date, diff)}</div>
+              <div class="names">${next.bins.map((b) => bdEsc(b.name)).join(' · ')}</div>
+              <div class="s">${sub}</div>
+            </div>
+          </div>
+          ${later.length ? `<div class="later">${later.map((d) => `
+            <div class="row"><span class="d">${when(d.date, Math.round((d.date - today) / 86400000))}</span>
+              <span class="chips">${d.bins.map((b) => `<span class="chip" style="background:${b.color}22;color:${b.color}"><ha-icon icon="${bdEsc(b.icon)}"></ha-icon>${bdEsc(b.name)}</span>`).join('')}</span></div>`).join('')}
+          </div>` : ''}`}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    if (!ev.target.closest('[data-act="more"]')) return;
+    const id = this._config.calendar || this._ids?.[0];
+    if (id) this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: id }, bubbles: true, composed: true }));
+  }
+
+  getCardSize() { return 2 + Math.ceil((this._config?.upcoming ?? 3) / 2); }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('bin-day-card-editor');
+  }
+
+  static getStubConfig() { return {}; }
+}
+
+customElements.define('bin-day-card', BinDayCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'bin-day-card',
+  name: 'Bin Day Card',
+  description: 'Next bin pickup from Waste Collection Schedule, highlighted the night before.',
+  preview: false,
+});
+
+class BinDayCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:trash-can', schema: [
+        f.text('title', 'Title', 'Default: "Next pickup"'),
+        f.entities('entities', 'Collection sensors', 'Default: every Waste Collection Schedule sensor', 'sensor'),
+        f.entity('calendar', 'Or a calendar', 'Read pickups from a calendar instead', 'calendar'),
+        f.grid(
+          f.number('highlight_from', '"Put out tonight" from', { min: 0, max: 23, unit: 'h', helper: 'Hour the day before. Default: 16' }),
+          f.number('upcoming', 'Later pickups shown', { min: 0, max: 10, helper: 'Default: 3' }),
+        ),
+      ] },
+      { title: 'Bin types', icon: 'mdi:palette', open: false, list: {
+        key: 'types',
+        schema: [f.text('match', 'Matches', 'Text in the pickup name, e.g. "recycl"'), f.grid(f.text('name', 'Show as'), f.icon('icon')), f.text('color', 'Colour', 'e.g. #2196f3')],
+        label: (t, i) => t.name || t.match || `Type ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add bin type',
+      } },
+    ];
+  }
+}
+
+customElements.define('bin-day-card-editor', BinDayCardEditor);
+})();
+
+console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer · Media · Security · Parcels · Flights · EV · Batteries · Komodo · Services · HA Health · Rooms · Climate · Kitchen · Bins ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');
