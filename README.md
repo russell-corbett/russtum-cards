@@ -528,6 +528,38 @@ types:                   # optional overrides, matched by text in the pickup nam
 
 ---
 
+## Travel Time Card
+
+Drive times from [Waze Travel Time](https://www.home-assistant.io/integrations/waze_travel_time/) in one list: minutes now, the route and distance, and whether traffic is **usual, slow or heavy** compared with the same time of day over the last week (from recorder history). Give a destination an `arrive_by` and it says **Leave by 8:12**, turning amber 10 minutes out and red when it's time to go. Tap a destination to start navigation in Waze, Google Maps or Apple Maps. Waze sensors are found automatically.
+
+```yaml
+type: custom:travel-time-card
+title: Travel times
+entities:              # optional: default = every Waze Travel Time sensor
+  - entity: sensor.home_to_mun
+    name: MUN
+    arrive_by: '08:30'
+navigation: waze       # waze | google | apple | none
+slow_pct: 15           # % over usual = slow
+heavy_pct: 35          # % over usual = heavy
+```
+
+---
+
+## Lights On Card
+
+Only the lights that are on, as tiles: **tap to turn one off, drag sideways to dim, hold for details**, plus an **All off** button. Light Groups (one per room) are found automatically and " Lights" is dropped from their names; the card hides itself when everything is off. Replaces the usual auto-entities + template setup.
+
+```yaml
+type: custom:lights-on-card
+source: groups        # groups (default) | all
+exclude: ['light.*screen*']
+columns: 2
+sort: name            # name | brightness | recent
+```
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
