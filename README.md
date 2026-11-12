@@ -608,6 +608,31 @@ rooms:
 
 ---
 
+## Vehicles Card
+
+A compact garage: one row per car with a small **side-view drawing** in the car's colour, **battery and fuel bars**, total range (plus electric range for plug-in hybrids), and status badges for plugged in, unlocked, door/boot open, tyre pressure, low fuel and washer fluid. While charging, the car gets a pulsing bolt and a "Charging · 1h 35m left" line; away from home it shows the zone. Tap a car for its range history.
+
+Kia/Hyundai cars (`kia_uvo`) are found automatically, so `type: custom:vehicles-card` on its own works. The body style is guessed from the model; override it, set the paint colour, or use your own picture:
+
+```yaml
+type: custom:vehicles-card
+title: Garage
+vehicles:
+  - device: <device id>          # pick it in the editor
+    name: Tucson PHEV
+    body: suv                    # crossover | suv | large_suv | sedan | hatchback | truck | van
+    color: '#8b1e1e'
+  - device: <device id>
+    color: white
+  - device: <device id>
+    image: /local/cars/santa-fe.png   # replaces the drawing
+low: 20                          # bars turn red at 20%, amber at 40%
+```
+
+Other makes work by setting the entities yourself: `battery`, `fuel`, `range`, `ev_range`, `charging`, `plugged`, `charge_time`, `lock`, `tracker`.
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.

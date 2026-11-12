@@ -82,7 +82,11 @@ class KitchenCard extends HTMLElement {
     this._calIds = c.meal_calendars.length ? c.meal_calendars
       : Object.keys(h.states).filter((id) => id.startsWith('calendar.') && reg[id]?.platform === 'mealie');
     this._tonightId = c.tonight_calendar || this._calIds.find((id) => /dinner|supper/i.test(id)) || this._calIds[0];
-    const listId = c.shopping_list || KC_LIST_PLATFORMS.map((p) => Object.keys(h.states).find((id) => id.startsWith('todo.') && reg[id]?.platform === p)).find(Boolean);
+    // Per platform, prefer a list that looks like a shopping list (Grocy also exposes todo.grocy_tasks).
+    const listId = c.shopping_list || KC_LIST_PLATFORMS.map((p) => {
+      const ids = Object.keys(h.states).filter((id) => id.startsWith('todo.') && reg[id]?.platform === p);
+      return ids.find((id) => /shopping|grocer/i.test(id)) || ids.find((id) => !/task|chore/i.test(id)) || ids[0];
+    }).find(Boolean);
     if (listId !== this._listId) { this._unsubscribe(); this._listId = listId; this._items = null; }
   }
 
