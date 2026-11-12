@@ -7822,11 +7822,24 @@ customElements.define('room-overview-card-editor', RoomOverviewCardEditor);
  *   columns: 3                      # Optional: tiles per row (default: as many as fit)
  *   hide_off: false                 # Hide thermostats that are off
  *   hide_summary: false             # Hide the heating count / furthest-off room line
+ *
+ *   # Plain temperature sensors (motion, leak, multi-sensors) as a row under each floor.
+ *   # Found automatically: sensor-only devices in an area on that floor. Thermostats,
+ *   # cars, printers, NAS and weather sensors are left out.
+ *   sensors:                        # Optional: pick them by hand instead
+ *     - entity: sensor.server_room_motion_temperature
+ *       name: Server Room
+ *   exclude_sensors: [sensor.garage_motion_temperature]
+ *   hide_sensors: false             # No sensor row at all
  */
 
 const CO_ORDER = { upstairs: 0, main_floor: 1, basement: 2 };
 const coEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const coList = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+// A room sensor device only has passive entities (no thermostat, light, camera, car…)…
+const CO_PASSIVE = new Set(['sensor', 'binary_sensor', 'event', 'button', 'update', 'number', 'select']);
+// …and senses the room: a motion/leak/door-type sensor or a humidity reading. This keeps out a NAS's system temperature.
+const CO_ROOM_BINARY = new Set(['motion', 'occupancy', 'presence', 'moisture', 'door', 'window', 'opening', 'garage_door', 'vibration', 'smoke', 'gas', 'carbon_monoxide', 'cold', 'heat']);
 
 class ClimateOverviewCard extends HTMLElement {
   constructor() {
@@ -7842,6 +7855,8 @@ class ClimateOverviewCard extends HTMLElement {
       tolerance: 1.5, ...config,
       exclude: coList(config.exclude),
       entities: coList(config.entities).map((e) => (typeof e === 'string' ? { entity: e } : e)).filter((e) => e?.entity),
+      sensors: coList(config.sensors).map((e) => (typeof e === 'string' ? { entity: e } : e)).filter((e) => e?.entity),
+      exclude_sensors: coList(config.exclude_sensors),
     };
     this._resolvedFor = null;
     this._render();
@@ -7881,12 +7896,63 @@ class ClimateOverviewCard extends HTMLElement {
       const floorId = area ? h.areas?.[area]?.floor_id || null : null;
       return { id, area, floorId };
     }).filter((r) => !c.floor || r.floorId === c.floor);
-    this._ids = this._rooms.map((r) => r.id);
+    this._sensors = c.hide_sensors ? [] : this._findSensors(areaOf)
+      .filter((x) => !c.floor || x.floorId === c.floor);
+    this._ids = [...this._rooms.map((r) => r.id), ...this._sensors.flatMap((x) => [x.id, x.hum]).filter(Boolean)];
 
     // Floors in building order: HA floor level (top first), then a sensible default.
     const levelOf = (f) => (floors[f]?.level != null ? -floors[f].level : CO_ORDER[f] ?? 50);
-    this._floorOrder = [...new Set(this._rooms.map((r) => r.floorId))]
+    this._floorOrder = [...new Set([...this._rooms.map((r) => r.floorId), ...this._sensors.map((x) => x.floorId)])]
       .sort((a, b) => (a == null) - (b == null) || levelOf(a) - levelOf(b));
+  }
+
+  // Temperature sensors that aren't thermostats: by hand, or every sensor-only device on a floor.
+  _findSensors(areaOf) {
+    const h = this._hass, c = this._config, reg = h.entities || {};
+    const byDevice = {};
+    for (const [id, e] of Object.entries(reg)) if (e.device_id) (byDevice[e.device_id] ||= []).push(id);
+    const dc = (id) => h.states[id]?.attributes?.device_class;
+    const humOf = (id) => (byDevice[reg[id]?.device_id] || []).find((x) => x.startsWith('sensor.') && dc(x) === 'humidity' && !reg[x]?.hidden) || null;
+    const floorOf = (id) => { const a = areaOf(id); return a ? h.areas?.[a]?.floor_id || null : null; };
+
+    let picked;
+    if (c.sensors.length) picked = c.sensors.map((e) => ({ id: e.entity, name: e.name }));
+    else {
+      picked = Object.keys(reg).filter((id) => {
+        if (!id.startsWith('sensor.') || dc(id) !== 'temperature') return false;
+        const e = reg[id];
+        if (e.hidden || e.entity_category || !e.device_id || !floorOf(id)) return false;
+        const sib = byDevice[e.device_id] || [];
+        return sib.every((x) => CO_PASSIVE.has(x.split('.')[0]))
+          && sib.some((x) => (x.startsWith('binary_sensor.') && CO_ROOM_BINARY.has(dc(x))) || (x.startsWith('sensor.') && dc(x) === 'humidity'));
+      }).map((id) => ({ id }));
+    }
+    return picked.filter((x) => !c.exclude_sensors.includes(x.id) && h.states[x.id])
+      .map((x) => ({ ...x, floorId: floorOf(x.id), hum: humOf(x.id) }));
+  }
+
+  _sensorName(x) {
+    if (x.name) return x.name;
+    const floors = this._hass.floors || {};
+    let n = String(this._hass.states[x.id]?.attributes?.friendly_name || x.id)
+      .replace(/\s*(motion|leak|water|contact|door|window|multipurpose|multi|climate|environment|temp)?\s*(sensor)?\s*temperature$/i, '').trim();
+    // "Basement Bathroom" under Basement → "Bathroom"
+    const fn = floors[x.floorId]?.name || String(x.floorId || '').replace(/_/g, ' ');
+    if (fn && n.toLowerCase().startsWith(fn.toLowerCase() + ' ')) n = n.slice(fn.length + 1);
+    return n || x.id;
+  }
+
+  _sensorRow(list) {
+    if (!list.length) return '';
+    const chips = list.map((x) => ({ ...x, n: this._sensorName(x) })).sort((a, b) => a.n.localeCompare(b.n)).map((x) => {
+      const st = this._hass.states[x.id];
+      const v = parseFloat(st?.state);
+      const ok = Number.isFinite(v);
+      const hum = x.hum ? parseFloat(this._hass.states[x.hum]?.state) : NaN;
+      return `<span class="sen ${ok ? '' : 'na'}" data-act="more" data-e="${coEsc(x.id)}" title="${coEsc(x.n)}">
+        <span class="sn">${coEsc(x.n)}</span><b>${ok ? v.toFixed(1) : '—'}°</b>${Number.isFinite(hum) ? `<span class="sh">${Math.round(hum)}%</span>` : ''}</span>`;
+    }).join('');
+    return `<div class="sens"><ha-icon icon="mdi:thermometer"></ha-icon>${chips}</div>`;
   }
 
   _name(id) {
@@ -7945,7 +8011,8 @@ class ClimateOverviewCard extends HTMLElement {
     const rooms = this._rooms.map((r) => this._room(r)).filter((r) => !c.hide_off || !r.off);
     const floors = this._hass.floors || {};
     const floorName = (f) => floors[f]?.name || (f ? f.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase()) : 'Other');
-    const groups = this._floorOrder.map((f) => ({ f, rooms: rooms.filter((r) => r.floorId === f) })).filter((g) => g.rooms.length);
+    const groups = this._floorOrder.map((f) => ({ f, rooms: rooms.filter((r) => r.floorId === f), sens: this._sensors.filter((x) => x.floorId === f) }))
+      .filter((g) => g.rooms.length || g.sens.length);
     const single = groups.length <= 1;
     const title = c.title ?? (c.floor ? floorName(c.floor) : 'Climate');
 
@@ -8002,11 +8069,20 @@ class ClimateOverviewCard extends HTMLElement {
         .room.off .rt { color: var(--secondary-text-color); font-weight: 600; }
         .room.na { opacity: .5; }
         .empty { padding: 12px 2px; color: var(--secondary-text-color); font-size: .9em; }
+        .sens { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px; font-size: .74em; color: var(--secondary-text-color); --mdc-icon-size: 14px; }
+        .grid + .sens { margin-top: 6px; }
+        .sens > ha-icon { opacity: .7; margin-right: -2px; }
+        .sen { display: inline-flex; align-items: baseline; gap: 4px; padding: 2px 8px; border-radius: 10px; cursor: pointer; white-space: nowrap;
+               background: rgba(127,127,127,.10); }
+        .sen:hover { background: rgba(127,127,127,.2); }
+        .sen b { color: var(--primary-text-color); font-weight: 600; font-variant-numeric: tabular-nums; }
+        .sen .sh { opacity: .8; }
+        .sen.na { opacity: .5; }
       </style>
       <ha-card>
         ${title || (!c.hide_summary && rooms.length) ? `<div class="head">${title ? `<div class="title">${coEsc(title)}</div>` : ''}${!c.hide_summary && rooms.length ? `<div class="sum">${summary}</div>` : ''}</div>` : ''}
-        ${!rooms.length ? '<div class="empty">No thermostats found.</div>' : ''}
-        ${groups.map((g) => `${single ? '' : `<div class="floor">${coEsc(floorName(g.f))}</div>`}<div class="grid">${g.rooms.map((r) => r.html).join('')}</div>`).join('')}
+        ${!groups.length ? '<div class="empty">No thermostats found.</div>' : ''}
+        ${groups.map((g) => `${single ? '' : `<div class="floor">${coEsc(floorName(g.f))}</div>`}${g.rooms.length ? `<div class="grid">${g.rooms.map((r) => r.html).join('')}</div>` : ''}${this._sensorRow(g.sens)}`).join('')}
       </ha-card>`;
     if (html === this._lastHtml) return;
     this._lastHtml = html;
@@ -8075,6 +8151,17 @@ class ClimateOverviewCardEditor extends window.RusstumEditor {
         f.grid(f.toggle('hide_off', 'Hide thermostats that are off'), f.toggle('hide_summary', 'Hide the summary line')),
         f.entities('exclude', 'Hide thermostats', '', 'climate'),
       ] },
+      { title: 'Temperature sensors', icon: 'mdi:thermometer', open: false, schema: [
+        f.toggle('hide_sensors', 'Hide the sensor row', 'By default, motion, leak and other sensor-only devices with a temperature are listed under their floor'),
+        f.entities('exclude_sensors', 'Leave out these sensors', '', 'sensor'),
+      ] },
+      { title: 'Pick sensors by hand', icon: 'mdi:format-list-checks', open: false, list: {
+        key: 'sensors',
+        schema: [f.grid(f.entity('entity', 'Temperature sensor', '', 'sensor'), f.text('name', 'Name'))],
+        label: (e, i) => e.name || e.entity || `Sensor ${i + 1}`,
+        newItem: () => ({}),
+        addLabel: 'Add sensor',
+      } },
       { title: 'Pick thermostats by hand', icon: 'mdi:format-list-checks', open: false, list: {
         key: 'entities',
         schema: [f.grid(f.entity('entity', 'Thermostat', '', 'climate'), f.text('name', 'Name'))],

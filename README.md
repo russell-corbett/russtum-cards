@@ -498,7 +498,11 @@ floor: main_floor        # optional: one floor per card; omit for the whole hous
 tolerance: 1.5           # degrees off target before a room is flagged
 ignore_below: 12         # setpoints under this are frost protection
 exclude: []
+exclude_sensors: []      # temperature sensors to leave out of the floor rows
+hide_sensors: false
 ```
+
+Under each floor, a row lists that floor's **plain temperature sensors** (motion, leak and multi-sensors) with their humidity when they have it, e.g. `🌡 Bar 17.7° · Bathroom 14.6° · Server Room 22.9°`. They're found automatically: sensor-only devices with a motion/leak/door-type sensor or humidity, in an area on that floor. Thermostats, cars, printers, a NAS and weather sensors stay out. Names drop "Motion", "Leak Sensor" and the floor's name. Pick them yourself with `sensors: [{entity, name}]`.
 
 ---
 
