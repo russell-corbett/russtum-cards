@@ -152,7 +152,11 @@ class FamilyCard extends HTMLElement {
 
     const bs = h.states[p.battery];
     const bat = bs && !isNaN(parseFloat(bs.state)) ? Math.round(parseFloat(bs.state)) : null;
-    const chg = /^charging|full/i.test(String(h.states[p.charging]?.state || '')) || /charging/i.test(String(bs?.attributes?.battery_status || ''));
+    // iCloud3 says "Charging" / "NotCharging" / "Full"; the Companion app "Charging" / "Not Charging" / "Full".
+    // Compare whole words so "NotCharging" isn't read as charging. "Full" means it's still on the charger.
+    const rawChg = h.states[p.charging]?.state ?? bs?.attributes?.battery_status ?? '';
+    const chgState = String(rawChg).toLowerCase().replace(/[^a-z]/g, '');
+    const chg = chgState === 'charging' || chgState === 'full';
     const batIcon = chg ? 'mdi:battery-charging' : bat == null ? '' : bat >= 90 ? 'mdi:battery' : `mdi:battery-${Math.max(10, Math.round(bat / 10) * 10)}`;
     const low = bat != null && bat <= Number(c.battery_low) && !chg;
 
@@ -167,7 +171,7 @@ class FamilyCard extends HTMLElement {
           <div class="ps">${fmEsc(status)}</div>
           ${car || bat != null ? `<div class="chips">
             ${car ? `<span class="chip car"><ha-icon icon="mdi:car"></ha-icon>${fmEsc(car)}</span>` : ''}
-            ${bat != null ? `<span class="chip bat ${low ? 'low' : ''} ${chg ? 'chg' : ''}"><ha-icon icon="${batIcon}"></ha-icon>${bat}%</span>` : ''}
+            ${bat != null ? `<span class="chip bat ${low ? 'low' : ''} ${chg ? 'chg' : ''}" title="${chg ? (chgState === 'full' ? 'Full, on charger' : 'Charging') : 'Not charging'}"><ha-icon icon="${batIcon}"></ha-icon>${bat}%</span>` : ''}
           </div>` : ''}
         </div>
       </div>`;
@@ -217,7 +221,7 @@ class FamilyCard extends HTMLElement {
                 background: rgba(127,127,127,.14); color: var(--secondary-text-color); white-space: nowrap; }
         .chip.car { background: rgba(3,169,244,.14); color: var(--primary-color, #03a9f4); }
         .chip.low { background: rgba(244,67,54,.16); color: var(--error-color, #f44336); font-weight: 600; }
-        .chip.chg { color: var(--success-color, #4caf50); }
+        .chip.chg { background: rgba(76,175,80,.16); color: var(--success-color, #4caf50); font-weight: 600; }
         .na { opacity: .6; }
       </style>
       <ha-card>
