@@ -404,6 +404,11 @@ type: custom:battery-card
 sort: level          # level | replaced | name
 only_low: false
 exclude: [Kitchen Pico]
+# Narrow it down (optional):
+skip_security: true  # leave out motion/door/leak/smoke sensors, locks and alarms
+manufacturers: [Signify, Lutron]
+models: [dimmer, Aurora]
+include: [Switch]    # device names to keep
 ```
 
 ---

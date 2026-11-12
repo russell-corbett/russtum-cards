@@ -6123,7 +6123,18 @@ customElements.define('ev-charger-card-editor', EvChargerCardEditor);
  *   hide_replace: false       # Hide the "Replaced" buttons
  *   exclude:                  # Device names to skip (partial match)
  *     - Kitchen Pico
+ *
+ *   Narrowing it down (all optional, partial matches, any of the list):
+ *   skip_security: true       # Leave out motion / door / leak / smoke sensors, locks and alarms
+ *   manufacturers: [Signify, Lutron]
+ *   models: [dimmer, Aurora]
+ *   include: [Switch]         # Device names to keep
  */
+
+// A device with any of these is a security device (for skip_security).
+const BT_SECURITY_CLASSES = new Set(['motion', 'occupancy', 'presence', 'door', 'window', 'opening', 'garage_door', 'lock',
+  'moisture', 'smoke', 'gas', 'carbon_monoxide', 'safety', 'tamper', 'vibration', 'sound']);
+const BT_SECURITY_DOMAINS = new Set(['lock', 'alarm_control_panel', 'siren']);
 
 const btEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -6189,7 +6200,26 @@ class BatteryCard extends HTMLElement {
       else if (/^button\..*_battery_replaced(_\d+)?$/.test(id)) d.button = id;
       else if (/^binary_sensor\..*_battery_plus_low(_\d+)?$/.test(id)) d.low = id;
     }
-    this._devices = Object.values(byDev).filter((d) => d.level || d.type || d.replaced);
+    const cfg = this._config;
+    const low = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => String(x).toLowerCase());
+    const mf = low(cfg.manufacturers), md = low(cfg.models), inc = low(cfg.include);
+    const any = (list, text) => !list.length || list.some((x) => String(text || '').toLowerCase().includes(x));
+    // Entities per device, for spotting security devices.
+    let devEnts = null;
+    if (cfg.skip_security) {
+      devEnts = {};
+      for (const e of Object.values(hass.entities || {})) if (e.device_id) (devEnts[e.device_id] ||= []).push(e.entity_id);
+    }
+    const isSecurity = (devId) => (devEnts?.[devId] || []).some((id) => {
+      const domain = id.split('.')[0];
+      return BT_SECURITY_DOMAINS.has(domain) || (domain === 'binary_sensor' && BT_SECURITY_CLASSES.has(hass.states[id]?.attributes?.device_class));
+    });
+    this._devices = Object.values(byDev).filter((d) => {
+      if (!(d.level || d.type || d.replaced)) return false;
+      const dev = hass.devices?.[d.id] || {};
+      if (!any(mf, dev.manufacturer) || !any(md, dev.model) || !any(inc, dev.name_by_user || dev.name)) return false;
+      return !(cfg.skip_security && isSecurity(d.id));
+    });
     this._watched = this._devices.flatMap((d) => [d.level, d.type, d.replaced, d.low]).filter(Boolean);
   }
 
@@ -6366,6 +6396,12 @@ class BatteryCardEditor extends window.RusstumEditor {
         ),
         f.grid(f.toggle('only_low', 'Only show low batteries'), f.toggle('hide_replace', 'Hide "Replaced" buttons')),
         f.states('exclude', 'Hide devices', [], 'Type part of a device name and press Enter'),
+      ] },
+      { title: 'Which devices', icon: 'mdi:filter-variant', open: false, schema: [
+        f.toggle('skip_security', 'Leave out security devices', 'Motion, door, leak and smoke sensors, locks and alarms'),
+        f.states('manufacturers', 'Only these makers', [], 'e.g. Signify, Lutron'),
+        f.states('models', 'Only these models', [], 'e.g. dimmer, Aurora'),
+        f.states('include', 'Only device names containing', [], 'e.g. Switch'),
       ] },
     ];
   }
