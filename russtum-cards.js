@@ -10780,10 +10780,18 @@ customElements.define('internet-card-editor', InternetCardEditor);
  *       receiver_source: Apple TV                     # Receiver input (default: matched by name)
  *       projector_source: HDMI1                       # Optional projector input
  *       scene: scene.apple_tv                         # Optional scene to run as well
+ *       apps: [Netflix, Prime Video, Fibe TV, Swiftfin, Spotify]   # Optional app buttons (the player's sources)
+ *       # or: apps: [{ app: Prime Video, name: Prime, icon: mdi:filmstrip, color: '#00a8e1' }]
  *     - name: Blu-ray
  *       icon: mdi:disc-player
  *       player: media_player.ubp_x800m2
  *       receiver_source: 4K/UHD Blu-ray
+ *   activities:                                       # Optional: big buttons that run your scenes or scripts
+ *     - script.movie_night_netflix
+ *     - entity: scene.4k_3d_movie
+ *       name: 3D Movie
+ *       icon: mdi:video-3d
+ *       color: '#7e57c2'
  *   light: light.movie_room_hue                       # Optional: tap toggles, drag dims
  *   scenes: [scene.movie_room_sync, scene.4k_3d_movie] # Optional: up to 4
  *   switches: [switch.sync_box_light_sync]            # Optional toggles, e.g. Hue Sync
@@ -10795,6 +10803,14 @@ customElements.define('internet-card-editor', InternetCardEditor);
 const TH_MODES = ['MOVIE', 'MUSIC', 'GAME', 'STEREO', 'AUTO', 'DIRECT', 'PURE DIRECT', 'DOLBY DIGITAL', 'DTS SURROUND'];
 const TH_SRC_ICONS = [[/apple/i, 'mdi:apple'], [/blu|disc|dvd|uhd/i, 'mdi:disc-player'], [/bell|fibe|cable|tv/i, 'mdi:television-classic'],
   [/game|xbox|playstation|ps\d|switch/i, 'mdi:controller'], [/record|vinyl|phono/i, 'mdi:album'], [/music|heos|spotify|bluetooth/i, 'mdi:music']];
+// Brand-ish colours and icons for common apps (matched by name).
+const TH_APPS = [
+  [/netflix/i, 'mdi:netflix', '#e50914'], [/prime|amazon/i, 'mdi:filmstrip-box', '#00a8e1'], [/fibe|bell/i, 'mdi:television-classic', '#00549a'],
+  [/swiftfin|jellyfin/i, 'mdi:jellyfish', '#aa5cc3'], [/spotify/i, 'mdi:spotify', '#1db954'], [/youtube/i, 'mdi:youtube', '#ff0000'],
+  [/disney/i, 'mdi:castle', '#113ccf'], [/plex/i, 'mdi:plex', '#e5a00d'], [/crave/i, 'mdi:alpha-c-box', '#1b5fa8'], [/twitch/i, 'mdi:twitch', '#9146ff'],
+  [/cbc/i, 'mdi:alpha-c-circle', '#d52b1e'], [/britbox/i, 'mdi:alpha-b-box', '#0b2a4a'], [/^tv$|apple tv/i, 'mdi:apple', '#333'], [/music/i, 'mdi:music', '#fa2d48'],
+  [/photos/i, 'mdi:image-multiple', '#f5a623'], [/steam/i, 'mdi:steam', '#1b2838'], [/podcast/i, 'mdi:podcast', '#9933cc'], [/settings/i, 'mdi:cog', '#6b6b6b'],
+];
 const thEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const thList = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const thEnt = (v) => (typeof v === 'string' ? { entity: v } : v || {});
@@ -10823,8 +10839,10 @@ class TheaterCard extends HTMLElement {
     }
     this._config = {
       title: 'Movie Room', ...config,
-      sources: thList(config.sources).map(thEnt),
+      sources: thList(config.sources).map(thEnt).map((s) => ({ ...s,
+        apps: thList(s.apps).map((a) => (typeof a === 'string' ? { app: a } : a)).filter((a) => a?.app) })),
       scenes: thList(config.scenes).map(thEnt).filter((s) => s.entity).slice(0, 4),
+      activities: thList(config.activities).map(thEnt).filter((s) => s.entity),
       switches: thList(config.switches).map(thEnt).filter((s) => s.entity),
     };
     this._lastHtml = null;
@@ -10850,7 +10868,7 @@ class TheaterCard extends HTMLElement {
   _watched() {
     const c = this._config;
     return [c.projector, c.receiver, c.light, ...this._sources().map((s) => s.player),
-      ...c.scenes.map((s) => s.entity), ...c.switches.map((s) => s.entity)].filter(Boolean);
+      ...c.scenes.map((s) => s.entity), ...c.switches.map((s) => s.entity), ...c.activities.map((s) => s.entity)].filter(Boolean);
   }
 
   // Sources from config, with the receiver input and icon filled in where left out.
@@ -10868,7 +10886,15 @@ class TheaterCard extends HTMLElement {
           || list.find((x) => want.includes(x.toLowerCase()) || x.toLowerCase().includes(want));
       }
       const name = s.name || rs || pname || 'Source';
-      return { ...s, name, receiver_source: rs, icon: s.icon || TH_SRC_ICONS.find(([re]) => re.test(name))?.[1] || 'mdi:video-input-hdmi' };
+      const plist = s.player ? h?.states[s.player]?.attributes?.source_list || [] : [];
+      const apps = s.apps.map((a) => {
+        const want = String(a.app).toLowerCase();
+        // Use the player's exact source name: "Prime" finds "Prime Video".
+        const real = plist.find((x) => x.toLowerCase() === want) || plist.find((x) => x.toLowerCase().replace(/\s/g, ' ').includes(want)) || a.app;
+        const brand = TH_APPS.find(([re]) => re.test(real)) || [];
+        return { ...a, app: real, name: a.name || a.app, icon: a.icon || brand[1] || 'mdi:application', color: a.color || brand[2] || 'var(--primary-color)' };
+      });
+      return { ...s, apps, name, receiver_source: rs, icon: s.icon || TH_SRC_ICONS.find(([re]) => re.test(name))?.[1] || 'mdi:video-input-hdmi' };
     });
   }
 
@@ -10948,6 +10974,44 @@ class TheaterCard extends HTMLElement {
         </div>
         ${dur > 0 ? `<div class="prog"><div class="bar"><i data-prog style="width:0%"></i></div><span data-ptime></span></div>` : ''}
       </div>`;
+  }
+
+  // Your scenes / scripts as tiles. The last one run is highlighted while the room is on.
+  _activityRow() {
+    const h = this._hass, c = this._config;
+    if (!c.activities.length) return '';
+    const when = (id) => {
+      const st = h.states[id];
+      if (!st) return 0;
+      if (id.startsWith('scene.')) return Date.parse(st.state) || 0;
+      if (st.state === 'on') return Date.now();
+      return Date.parse(st.attributes?.last_triggered) || 0;
+    };
+    const last = this._anyOn() ? c.activities.map((a) => ({ id: a.entity, t: when(a.entity) })).filter((x) => x.t).sort((a, b) => b.t - a.t)[0]?.id : null;
+    return `<div class="apps acts">${c.activities.map((a) => {
+      const st = h.states[a.entity];
+      const name = a.name || String(st?.attributes?.friendly_name || a.entity).replace(new RegExp(`^${c.title}\\s+`, 'i'), '');
+      const brand = TH_APPS.find(([re]) => re.test(name)) || [];
+      const icon = a.icon || st?.attributes?.icon || brand[1] || (a.entity.startsWith('script.') ? 'mdi:play-circle' : 'mdi:palette');
+      const color = a.color || brand[2] || 'var(--primary-color, #03a9f4)';
+      const running = st?.state === 'on' && a.entity.startsWith('script.');
+      return `<button class="app ${last === a.entity ? 'act' : ''} ${running ? 'run' : ''}" data-act="activity" data-e="${thEsc(a.entity)}" title="${thEsc(name)}" style="--app:${thEsc(color)}">
+        <span class="ai"><ha-icon icon="${thEsc(icon)}"></ha-icon></span><span class="an">${thEsc(name)}</span></button>`;
+    }).join('')}</div>`;
+  }
+
+  // App buttons for the active source (or, when nothing's on, the first source that has apps).
+  _appRow(sources, src) {
+    const s = src?.apps?.length ? src : !this._anyOn() ? sources.find((x) => x.apps.length) : null;
+    if (!s) return '';
+    const si = sources.indexOf(sources.find((x) => x.name === s.name));
+    const st = this._hass.states[s.player];
+    const curApp = !thOff(st) ? String(st?.attributes?.app_name || st?.attributes?.source || '').toLowerCase() : '';
+    return `<div class="apps">${s.apps.map((a, i) => {
+      const act = curApp && curApp === a.app.toLowerCase().replace(/\u00a0/g, ' ');
+      return `<button class="app ${act ? 'act' : ''}" data-act="app" data-i="${si}" data-a="${i}" title="Open ${thEsc(a.name)} on ${thEsc(s.name)}" style="--app:${thEsc(a.color)}">
+        <span class="ai"><ha-icon icon="${thEsc(a.icon)}"></ha-icon></span><span class="an">${thEsc(a.name)}</span></button>`;
+    }).join('')}</div>`;
   }
 
   _anyOn() {
@@ -11047,6 +11111,18 @@ class TheaterCard extends HTMLElement {
         .src.act { border-color: var(--th-accent); background: color-mix(in srgb, var(--th-accent) 16%, var(--secondary-background-color, transparent)); }
         .src.act ha-icon { color: var(--th-accent); }
 
+        .apps { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: -2px 0; padding: 2px 0; }
+        .apps::-webkit-scrollbar { display: none; }
+        .app { flex: 1 0 58px; max-width: 84px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 2px; border: none; border-radius: 12px;
+               background: none; cursor: pointer; font: inherit; color: var(--secondary-text-color); }
+        .app .ai { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; color: #fff; --mdc-icon-size: 24px;
+                   background: var(--app); box-shadow: 0 2px 6px rgba(0,0,0,.25); transition: transform .12s; }
+        .app:hover .ai { transform: translateY(-1px) scale(1.04); }
+        .app .an { font-size: .7em; font-weight: 600; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .app.act .ai { box-shadow: 0 0 0 2px var(--card-background-color, #1c1c1c), 0 0 0 4px var(--app); }
+        .app.act .an { color: var(--primary-text-color); }
+        .app.run .ai { animation: th-pulse 1.2s ease-in-out infinite; }
+        @keyframes th-pulse { 50% { opacity: .6; } }
         .audio { display: flex; align-items: center; gap: 8px; ${rxOn ? '' : 'opacity: .45;'} }
         .ib { width: 32px; height: 32px; border-radius: 50%; border: none; cursor: pointer; display: grid; place-items: center; flex: none;
               background: rgba(127,127,127,.12); color: var(--primary-text-color); --mdc-icon-size: 18px; }
@@ -11093,6 +11169,8 @@ class TheaterCard extends HTMLElement {
           ${sources.length ? `<div class="srcs">${sources.map((s, i) => `
             <button class="src ${src === s || (src && src.name === s.name) ? 'act' : ''}" data-act="source" data-i="${i}" title="Watch ${thEsc(s.name)}">
               <ha-icon icon="${thEsc(s.icon)}"></ha-icon><span>${thEsc(s.name)}</span></button>`).join('')}</div>` : ''}
+          ${this._activityRow()}
+          ${this._appRow(sources, src)}
           ${rx ? `<div class="audio">
             <button class="ib ${muted ? 'muted' : ''}" data-act="mute" title="${muted ? 'Unmute' : 'Mute'}"><ha-icon icon="${muted ? 'mdi:volume-off' : 'mdi:volume-high'}"></ha-icon></button>
             <button class="ib" data-act="vol" data-d="down" title="Quieter"><ha-icon icon="mdi:minus"></ha-icon></button>
@@ -11167,6 +11245,21 @@ class TheaterCard extends HTMLElement {
     } else if (act === 'source') {
       const s = this._sources()[Number(el.dataset.i)];
       if (s) this._startSource(s);
+    } else if (act === 'activity') {
+      const id = el.dataset.e;
+      const domain = id.split('.')[0];
+      if (domain === 'scene') this._call('scene', 'turn_on', { entity_id: id });
+      else if (domain === 'script') this._call('script', 'turn_on', { entity_id: id });
+      else this._call('homeassistant', 'turn_on', { entity_id: id });
+    } else if (act === 'app') {
+      const s = this._sources()[Number(el.dataset.i)];
+      const a = s?.apps[Number(el.dataset.a)];
+      if (!s || !a || !s.player) return;
+      // Get the room on this source first, then open the app on the player.
+      const c2 = this._config, h2 = this._hass;
+      const roomOff = [c2.projector, c2.receiver].some((id) => id && thOff(h2.states[id]));
+      if (this._src?.name !== s.name || roomOff) this._startSource(s);
+      this._call('media_player', 'select_source', { entity_id: s.player, source: a.app });
     } else if (act === 'media') {
       if (this._src?.player) this._call('media_player', el.dataset.s, { entity_id: this._src.player });
     } else if (act === 'mute') {
@@ -11290,12 +11383,17 @@ class TheaterCardEditor extends window.RusstumEditor {
           f.grid(f.text('name', 'Name'), f.icon('icon')),
           f.grid(f.entity('player', 'Player', 'Shown on the screen when it plays', 'media_player'), f.text('receiver_source', 'Receiver input', 'Default: matched by name')),
           f.grid(f.text('projector_source', 'Projector input'), f.entity('scene', 'Scene', '', 'scene')),
+          { name: 'apps', label: 'App buttons', helper: "App names as the player lists them, e.g. Netflix, Prime Video", selector: { select: { multiple: true, custom_value: true, options: [] } } },
         ],
         label: (s, i) => s.name || s.player || `Source ${i + 1}`,
         newItem: () => ({}),
         addLabel: 'Add source',
         collapsible: true,
       } },
+      { title: 'Activities', icon: 'mdi:play-box-multiple', schema: [
+        { name: 'activities', label: 'Activity buttons', helper: 'Scenes or scripts, e.g. "Netflix night" that turns everything on and opens Netflix',
+          selector: { entity: { multiple: true, filter: [{ domain: 'scene' }, { domain: 'script' }] } } },
+      ] },
       { title: 'Lights', icon: 'mdi:lightbulb-group', schema: [
         f.entity('light', 'Room light', 'Tap toggles, drag dims', 'light'),
         f.entities('scenes', 'Scenes (up to 4)', '', 'scene'),

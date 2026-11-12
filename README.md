@@ -658,6 +658,8 @@ hours: 24
 A home theater on one card. The top is a **screen**: what's playing on the active source with blurred artwork, progress, time left and play/pause, with a glow along the top edge while the projector is on. Below it:
 
 - **Sources**: one tap turns on the projector and receiver, switches the receiver's input, wakes the player and runs the source's scene. The receiver input is matched by name if you leave it out ("Blu-ray" → "4K/UHD Blu-ray").
+- **Activities** (optional): a row of big buttons that run your own **scenes or scripts**, e.g. a "Netflix night" script that turns everything on, dims the lights and opens Netflix. The last one run is highlighted.
+- **Apps** (optional, per source): app buttons with brand colours, e.g. `apps: [Netflix, Prime, Fibe TV, Swiftfin, Spotify]`. Tapping one turns the room on to that source if needed, then opens the app on the player. The open app is highlighted; "Prime" finds "Prime Video".
 - **Volume**: drag or tap the bar, −/+, mute; shown in dB for Denon/Marantz. A dropdown for your favourite **sound modes**.
 - **Devices**: projector, receiver and each player with its state (input, app, playing). Tap for power, hold for details.
 - **Lights**: the room light (tap toggles, drag dims), up to 4 scenes with the last one highlighted, and switches like Hue Sync.
@@ -672,11 +674,17 @@ sources:
   - name: Apple TV
     player: media_player.movie_room_apple_tv
     scene: scene.apple_tv
+    apps: [Netflix, Prime Video, Fibe TV, Swiftfin, Spotify]
   - name: Blu-ray
     player: media_player.ubp_x800m2
   - name: Bell TV
     player: media_player.fibetv
     icon: mdi:television-classic
+activities:                     # your scenes / scripts
+  - script.netflix_night
+  - entity: scene.4k_3d_movie
+    name: 3D Movie
+    icon: mdi:video-3d
 light: light.movie_room_hue
 scenes: [scene.4k_3d_movie, scene.movie_room_sync]
 switches: [switch.sync_box_light_sync]
