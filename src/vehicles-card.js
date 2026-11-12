@@ -19,6 +19,7 @@
  *       body: suv                       # crossover | suv | large_suv | sedan | hatchback | truck | van
  *       color: '#8a1c1c'                # Paint colour for the drawing
  *       image: /local/cars/tucson.png   # Optional: your own picture instead of the drawing
+ *   image_size: 120                     # Width of photos in px (default 120; drawings stay compact)
  *       # Optional overrides (normally found from the device):
  *       battery: sensor.tucson_ev_battery_level
  *       fuel: sensor.tucson_fuel_level
@@ -169,7 +170,7 @@ class VehiclesCard extends HTMLElement {
 
   _art(car, charging) {
     const c = car.cfg;
-    if (c.image) return `<div class="art"><img src="${vcEsc(c.image)}" alt=""></div>`;
+    if (c.image) return `<div class="art photo"><img src="${vcEsc(c.image)}" alt="">${charging ? '<span class="bolt"><ha-icon icon="mdi:lightning-bolt"></ha-icon></span>' : ''}</div>`;
     const s = VC_SHAPES[car.body];
     const paint = vcEsc(c.color || 'var(--vc-paint)');
     const pillars = s.pillars.map((x) => `<rect x="${x}" y="${s.win[0]}" width="2.4" height="${s.win[1] - s.win[0]}" fill="${paint}"/>`).join('');
@@ -263,13 +264,14 @@ class VehiclesCard extends HTMLElement {
       : '<div class="empty">No cars found. Add them under <code>vehicles</code>.</div>';
     const html = `
       <style>
-        :host { --vc-paint: #9aa4ae; }
+        :host { --vc-paint: #9aa4ae; ${Number(c.image_size) > 0 ? `--vc-img: ${Number(c.image_size)}px;` : ''} }
         ha-card { padding: 6px 0; overflow: hidden; }
         .title { padding: 8px 16px 2px; font-size: 1.05rem; font-weight: 500; color: var(--primary-text-color); }
-        .car { display: grid; grid-template-columns: 76px 1fr auto; gap: 12px; align-items: center; padding: 8px 16px; cursor: pointer; }
+        .car { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 8px 16px; cursor: pointer; }
         .car + .car { border-top: 1px solid var(--divider-color, rgba(127,127,127,.15)); }
         .car:hover { background: rgba(127,127,127,.06); }
         .art { position: relative; width: 76px; height: 30px; }
+        .art.photo { width: var(--vc-img, 120px); height: calc(var(--vc-img, 120px) * .6); margin: -4px 0; }
         .art svg, .art img { width: 100%; height: 100%; display: block; object-fit: contain; }
         .body { stroke: rgba(0,0,0,.35); stroke-width: .7; }
         .glass { fill: #2a3540; opacity: .92; }
@@ -310,7 +312,7 @@ class VehiclesCard extends HTMLElement {
         .range .unit { font-size: .75rem; color: var(--secondary-text-color); }
         .range .sub { font-size: .7rem; color: var(--success-color, #4caf50); margin-top: 2px; white-space: nowrap; }
         .empty { padding: 12px 16px; color: var(--secondary-text-color); }
-        @media (max-width: 380px) { .car { grid-template-columns: 60px 1fr auto; gap: 10px; } .art { width: 60px; height: 24px; } }
+        @media (max-width: 380px) { .car { gap: 10px; } .art { width: 60px; height: 24px; } .art.photo { width: 88px; height: 53px; } }
       </style>
       <ha-card>
         ${c.title ? `<div class="title">${vcEsc(c.title)}</div>` : ''}

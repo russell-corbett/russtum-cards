@@ -630,10 +630,26 @@ vehicles:
     color: white
   - device: <device id>
     image: /local/cars/santa-fe.png   # replaces the drawing
+image_size: 120                  # photo width in px (default 120)
 low: 20                          # bars turn red at 20%, amber at 40%
 ```
 
 Other makes work by setting the entities yourself: `battery`, `fuel`, `range`, `ev_range`, `charging`, `plugged`, `charge_time`, `lock`, `tracker`.
+
+---
+
+## Internet Card
+
+Download, upload and ping from the Speedtest.net integration, each with a **sparkline of the last 24 hours** (dotted line = average; hover for low/avg/high), an **Online / Offline** pill, your **external IP** (tap to copy), the server tested and how long ago, and a **⟳ button that runs a new test**. Speedtest sensors and `sensor.external_ip` are found automatically.
+
+```yaml
+type: custom:internet-card
+connectivity: binary_sensor.bell_modem_ping   # optional Online/Offline pill
+plan_download: 500      # optional: under half of plan turns amber, under a quarter red
+plan_upload: 50
+high_ping: 100          # ms before ping turns amber (red at double)
+hours: 24
+```
 
 ---
 
