@@ -583,6 +583,31 @@ hide_when_all_home: true
 
 ---
 
+## Floor Lights Card
+
+One floor's lights, room by room. Each room gets a light tile (**tap to toggle, drag sideways to dim, hold for details**), up to **four scene buttons** and any extra switches (a Christmas tree plug, outdoor outlets). The scene last turned on stays highlighted while the room's light is on, and scene names drop the room's name ("Movie Room Just Bar" → "Just Bar"). Rooms with only a light sit two to a row. The header counts what's on and has an **All off** for the floor.
+
+```yaml
+type: custom:floor-lights-card
+title: Basement
+icon: mdi:home-floor-b
+rooms:
+  - light: light.movie_room_lights
+    scenes:                        # up to 4
+      - scene.movie_room_bright
+      - scene.movie_room_just_bar
+      - scene.movie_room_regular_movie
+      - entity: scene.movie_room_sync
+        name: Hue Sync
+        icon: mdi:television-ambient-light
+  - light: light.office_lights
+  - name: Basement Stairs
+    light: light.basement_stairs_main_light
+    switches: [switch.movie_room_cabinet]
+```
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
