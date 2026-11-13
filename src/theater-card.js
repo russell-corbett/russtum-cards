@@ -56,6 +56,9 @@ const thEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', 
 const thList = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const thEnt = (v) => (typeof v === 'string' ? { entity: v } : v || {});
 const thOff = (st) => !st || ['off', 'unavailable', 'unknown', 'standby'].includes(st.state);
+// media_player supported_features bits: some players (e.g. DLNA Blu-ray) have no power control.
+const TH_ON = 128, TH_OFF = 256;
+const thCan = (st, bit) => !!st && (Number(st.attributes?.supported_features) & bit) === bit;
 const thTime = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${m}:${String(x).padStart(2, '0')}`; };
 const thTitle = (s) => String(s || '').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bDts\b/, 'DTS');
@@ -287,7 +290,7 @@ class TheaterCard extends HTMLElement {
       const on = !thOff(st);
       const state = !st ? 'Missing' : st.state === 'unavailable' ? 'Offline' : on ? (st.state === 'playing' ? 'Playing' : st.state === 'paused' ? 'Paused' : 'On') : 'Off';
       const info = on && st ? d.info(st) : '';
-      return `<button class="dev ${on ? 'on' : ''} ${st?.state === 'unavailable' ? 'na' : ''}" data-act="devpower" data-e="${thEsc(d.id)}" data-hold="${thEsc(d.id)}" title="${thEsc(d.name)}: tap for power, hold for details">
+      return `<button class="dev ${on ? 'on' : ''} ${st?.state === 'unavailable' ? 'na' : ''}" data-act="devpower" data-e="${thEsc(d.id)}" data-hold="${thEsc(d.id)}" title="${thEsc(d.name)}: ${thCan(st, TH_ON) || thCan(st, TH_OFF) ? 'tap for power, hold for details' : 'no power control, tap for details'}">
           <ha-icon icon="${d.icon}"></ha-icon><span class="dn">${thEsc(d.name)}</span><span class="ds">${thEsc(info || state)}</span></button>`;
     }).join('');
 
@@ -452,19 +455,22 @@ class TheaterCard extends HTMLElement {
   // Turn on the projector and receiver, switch inputs, wake the player and run the source's scene.
   _startSource(s) {
     const h = this._hass, c = this._config;
-    if (c.projector && thOff(h.states[c.projector])) this._call('media_player', 'turn_on', { entity_id: c.projector });
+    const wake = (id) => { const st = h.states[id]; if (id && thOff(st) && thCan(st, TH_ON)) this._call('media_player', 'turn_on', { entity_id: id }); };
+    wake(c.projector);
     if (c.projector && s.projector_source) this._call('media_player', 'select_source', { entity_id: c.projector, source: s.projector_source });
     if (c.receiver) {
-      if (thOff(h.states[c.receiver])) this._call('media_player', 'turn_on', { entity_id: c.receiver });
+      wake(c.receiver);
       if (s.receiver_source) this._call('media_player', 'select_source', { entity_id: c.receiver, source: s.receiver_source });
     }
-    if (s.player && thOff(h.states[s.player])) this._call('media_player', 'turn_on', { entity_id: s.player });
+    wake(s.player);
     if (s.scene) this._call('scene', 'turn_on', { entity_id: s.scene });
   }
 
   _allOff() {
     const h = this._hass, c = this._config;
-    const ids = [c.projector, c.receiver, ...this._sources().map((s) => s.player)].filter((id, i, a) => id && a.indexOf(id) === i && !thOff(h.states[id]));
+    // Only devices that can be turned off: one unsupported entity would fail the whole call.
+    const ids = [c.projector, c.receiver, ...this._sources().map((s) => s.player)]
+      .filter((id, i, a) => id && a.indexOf(id) === i && !thOff(h.states[id]) && thCan(h.states[id], TH_OFF));
     if (ids.length) this._call('media_player', 'turn_off', { entity_id: ids });
     if (c.off_scene) this._call('scene', 'turn_on', { entity_id: c.off_scene });
   }
@@ -475,7 +481,7 @@ class TheaterCard extends HTMLElement {
     if (!el || !this._hass) return;
     const c = this._config, act = el.dataset.act;
     if (act === 'power') {
-      if (!this._anyOn()) { const s = this._sources()[0]; if (s) this._startSource(s); else ['projector', 'receiver'].forEach((k) => c[k] && this._call('media_player', 'turn_on', { entity_id: c[k] })); return; }
+      if (!this._anyOn()) { const s = this._sources()[0]; if (s) this._startSource(s); else ['projector', 'receiver'].forEach((k) => c[k] && thCan(this._hass.states[c[k]], TH_ON) && this._call('media_player', 'turn_on', { entity_id: c[k] })); return; }
       if (!this._confirm) {
         this._confirm = true; this._lastHtml = null; this._render();
         clearTimeout(this._confirmT);
@@ -510,7 +516,13 @@ class TheaterCard extends HTMLElement {
       this._call('media_player', el.dataset.d === 'up' ? 'volume_up' : 'volume_down', { entity_id: c.receiver });
     } else if (act === 'devpower') {
       const st = this._hass.states[el.dataset.e];
-      this._call('media_player', thOff(st) ? 'turn_on' : 'turn_off', { entity_id: el.dataset.e });
+      const svc = thOff(st) ? 'turn_on' : 'turn_off';
+      // No power control on this device (e.g. a DLNA Blu-ray player): show its details instead.
+      if (!thCan(st, svc === 'turn_on' ? TH_ON : TH_OFF)) {
+        this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.e }, bubbles: true, composed: true }));
+        return;
+      }
+      this._call('media_player', svc, { entity_id: el.dataset.e });
     } else if (act === 'scene') {
       this._call('scene', 'turn_on', { entity_id: el.dataset.e });
     } else if (act === 'toggle') {
