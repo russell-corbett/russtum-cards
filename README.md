@@ -689,6 +689,7 @@ light: light.movie_room_hue
 scenes: [scene.4k_3d_movie, scene.movie_room_sync]
 switches: [switch.sync_box_light_sync]
 off_scene: scene.movie_room_off
+power_switches: [switch.sync_box_power]   # on with any source, off with "all off"
 sound_modes: [MOVIE, MUSIC, STEREO, AUTO, DIRECT]
 ```
 

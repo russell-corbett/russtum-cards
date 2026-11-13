@@ -37,6 +37,9 @@
  *   scenes: [scene.movie_room_sync, scene.4k_3d_movie] # Optional: up to 4
  *   switches: [switch.sync_box_light_sync]            # Optional toggles, e.g. Hue Sync
  *   off_scene: scene.movie_room_off                   # Optional: run when turning it all off
+ *   power_switches:                                   # Optional: switched on with the room and off with "all off"
+ *     - entity: switch.sync_box_power
+ *       name: Sync Box
  *   sound_modes: [MOVIE, MUSIC, STEREO, AUTO]         # Sound modes offered (default: these, if the receiver has them)
  *   volume_db: true                                   # Show volume in dB (default: on for Denon/Marantz)
  */
@@ -88,6 +91,7 @@ class TheaterCard extends HTMLElement {
       scenes: thList(config.scenes).map(thEnt).filter((s) => s.entity).slice(0, 4),
       activities: thList(config.activities).map(thEnt).filter((s) => s.entity),
       switches: thList(config.switches).map(thEnt).filter((s) => s.entity),
+      power_switches: thList(config.power_switches).map(thEnt).filter((s) => s.entity),
     };
     this._lastHtml = null;
   }
@@ -112,7 +116,7 @@ class TheaterCard extends HTMLElement {
   _watched() {
     const c = this._config;
     return [c.projector, c.receiver, c.light, ...this._sources().map((s) => s.player),
-      ...c.scenes.map((s) => s.entity), ...c.switches.map((s) => s.entity), ...c.activities.map((s) => s.entity)].filter(Boolean);
+      ...c.scenes.map((s) => s.entity), ...c.switches.map((s) => s.entity), ...c.activities.map((s) => s.entity), ...c.power_switches.map((s) => s.entity)].filter(Boolean);
   }
 
   // Sources from config, with the receiver input and icon filled in where left out.
@@ -284,13 +288,15 @@ class TheaterCard extends HTMLElement {
       c.projector && { id: c.projector, name: 'Projector', icon: 'mdi:projector', info: (st) => st.attributes.source || st.attributes.cmode || '' },
       c.receiver && { id: c.receiver, name: 'Receiver', icon: 'mdi:audio-video', info: (st) => st.attributes.source || '' },
       ...sources.filter((s) => s.player).map((s) => ({ id: s.player, name: s.name, icon: s.icon, info: (st) => st.attributes.app_name || '' })),
+      ...c.power_switches.map((x) => ({ id: x.entity, name: x.name || String(h.states[x.entity]?.attributes?.friendly_name || x.entity).replace(/\s+power$/i, ''),
+        icon: x.icon || (/sync/i.test(x.entity) ? 'mdi:television-ambient-light' : 'mdi:power-plug'), info: () => '', isSwitch: true })),
     ].filter(Boolean).filter((d, i, arr) => arr.findIndex((x) => x.id === d.id) === i);
     const devHtml = devices.map((d) => {
       const st = h.states[d.id];
       const on = !thOff(st);
       const state = !st ? 'Missing' : st.state === 'unavailable' ? 'Offline' : on ? (st.state === 'playing' ? 'Playing' : st.state === 'paused' ? 'Paused' : 'On') : 'Off';
       const info = on && st ? d.info(st) : '';
-      return `<button class="dev ${on ? 'on' : ''} ${st?.state === 'unavailable' ? 'na' : ''}" data-act="devpower" data-e="${thEsc(d.id)}" data-hold="${thEsc(d.id)}" title="${thEsc(d.name)}: ${thCan(st, TH_ON) || thCan(st, TH_OFF) ? 'tap for power, hold for details' : 'no power control, tap for details'}">
+      return `<button class="dev ${on ? 'on' : ''} ${st?.state === 'unavailable' ? 'na' : ''}" data-act="devpower" data-e="${thEsc(d.id)}" data-hold="${thEsc(d.id)}" title="${thEsc(d.name)}: ${d.isSwitch || thCan(st, TH_ON) || thCan(st, TH_OFF) ? 'tap for power, hold for details' : 'no power control, tap for details'}">
           <ha-icon icon="${d.icon}"></ha-icon><span class="dn">${thEsc(d.name)}</span><span class="ds">${thEsc(info || state)}</span></button>`;
     }).join('');
 
@@ -457,6 +463,8 @@ class TheaterCard extends HTMLElement {
     const h = this._hass, c = this._config;
     const wake = (id) => { const st = h.states[id]; if (id && thOff(st) && thCan(st, TH_ON)) this._call('media_player', 'turn_on', { entity_id: id }); };
     wake(c.projector);
+    const swOff = c.power_switches.map((x) => x.entity).filter((id) => h.states[id]?.state === 'off');
+    if (swOff.length) this._call('homeassistant', 'turn_on', { entity_id: swOff });
     if (c.projector && s.projector_source) this._call('media_player', 'select_source', { entity_id: c.projector, source: s.projector_source });
     if (c.receiver) {
       wake(c.receiver);
@@ -472,6 +480,8 @@ class TheaterCard extends HTMLElement {
     const ids = [c.projector, c.receiver, ...this._sources().map((s) => s.player)]
       .filter((id, i, a) => id && a.indexOf(id) === i && !thOff(h.states[id]) && thCan(h.states[id], TH_OFF));
     if (ids.length) this._call('media_player', 'turn_off', { entity_id: ids });
+    const swOn = c.power_switches.map((x) => x.entity).filter((id) => h.states[id]?.state === 'on');
+    if (swOn.length) this._call('homeassistant', 'turn_off', { entity_id: swOn });
     if (c.off_scene) this._call('scene', 'turn_on', { entity_id: c.off_scene });
   }
 
@@ -516,6 +526,7 @@ class TheaterCard extends HTMLElement {
       this._call('media_player', el.dataset.d === 'up' ? 'volume_up' : 'volume_down', { entity_id: c.receiver });
     } else if (act === 'devpower') {
       const st = this._hass.states[el.dataset.e];
+      if (!el.dataset.e.startsWith('media_player.')) { this._call('homeassistant', 'toggle', { entity_id: el.dataset.e }); return; }
       const svc = thOff(st) ? 'turn_on' : 'turn_off';
       // No power control on this device (e.g. a DLNA Blu-ray player): show its details instead.
       if (!thCan(st, svc === 'turn_on' ? TH_ON : TH_OFF)) {
@@ -629,6 +640,8 @@ class TheaterCardEditor extends window.RusstumEditor {
         f.text('title', 'Title', 'Default: Movie Room'),
         f.grid(f.entity('projector', 'Projector', '', 'media_player'), f.entity('receiver', 'Receiver / sound system', '', 'media_player')),
         f.grid(f.toggle('volume_db', 'Show volume in dB', 'Default: on for Denon / Marantz'), f.entity('off_scene', 'Scene when turning off', '', 'scene')),
+        { name: 'power_switches', label: 'Power with the room', helper: 'Switches turned on with any source and off with "all off", e.g. the Hue Sync Box',
+          selector: { entity: { multiple: true, filter: [{ domain: 'switch' }, { domain: 'input_boolean' }] } } },
       ] },
       { title: 'Sources', icon: 'mdi:video-input-hdmi', list: {
         key: 'sources',
