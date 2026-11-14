@@ -58,10 +58,13 @@ const TH_APPS = [
 const thEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const thList = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const thEnt = (v) => (typeof v === 'string' ? { entity: v } : v || {});
-const thOff = (st) => !st || ['off', 'unavailable', 'unknown', 'standby'].includes(st.state);
 // media_player supported_features bits: some players (e.g. DLNA Blu-ray) have no power control.
 const TH_ON = 128, TH_OFF = 256;
 const thCan = (st, bit) => !!st && (Number(st.attributes?.supported_features) & bit) === bit;
+// A player with no power control (DLNA renderers) sits at "idle" whenever it's on the network,
+// even in standby, so for those only playing/paused counts as on.
+const thOff = (st) => !st || ['off', 'unavailable', 'unknown', 'standby'].includes(st.state)
+  || (st.state === 'idle' && !thCan(st, TH_ON) && !thCan(st, TH_OFF));
 const thTime = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${m}:${String(x).padStart(2, '0')}`; };
 const thTitle = (s) => String(s || '').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bDts\b/, 'DTS');
