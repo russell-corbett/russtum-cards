@@ -1702,7 +1702,7 @@ customElements.define('media-server-card-editor', MediaServerCardEditor);
  *
  * Configuration:
  *   type: custom:minecraft-card
- *   title: Russell's Minecraft Server    # Card title (optional)
+ *   title: My Minecraft Server    # Card title (optional)
  *   status_entity: binary_sensor.mc_online          # online/off — binary or text
  *   players_entity: sensor.mc_players_online        # current player count
  *   max_players_entity: sensor.mc_max_players       # max player slots (optional)
@@ -2100,7 +2100,7 @@ class MinecraftCard extends HTMLElement {
 
   static getStubConfig() {
     return {
-      title: "Russell's Minecraft Server",
+      title: "My Minecraft Server",
       status_entity: 'binary_sensor.minecraft_server_status',
       players_entity: 'sensor.minecraft_server_players_online',
       max_players_entity: 'sensor.minecraft_server_players_max',
@@ -4583,7 +4583,7 @@ customElements.define('printer-card-editor', PrinterCardEditor);
  *       icon: mdi:cast-variant           # Optional
  *       hide_paused: false               # Treat "paused" as inactive for this player
  *       hide_when_active:                # Hide this player while any of these are on
- *         - media_player.russell_bedroom_tv
+ *         - media_player.bedroom_tv
  *         - media_player.xboxone
  */
 
@@ -5774,24 +5774,24 @@ customElements.define('flight-card-editor', FlightCardEditor);
  * Configuration:
  *   type: custom:ev-charger-card
  *   title: Home Charger
- *   charger_entity: switch.corbett_ev               # Enable/disable switch (tap the power button)
- *   status_entity: sensor.garage_corbett_ev_status  # Optional text status
- *   power_entity: sensor.corbett_ev_power_minute_average
- *   energy_today_entity: sensor.corbett_ev_energy_today
- *   energy_month_entity: sensor.corbett_ev_energy_this_month
- *   current_limit_entity: number.garage_corbett_ev_current_limit   # +/- buttons
+ *   charger_entity: switch.garage_charger               # Enable/disable switch (tap the power button)
+ *   status_entity: sensor.garage_charger_status  # Optional text status
+ *   power_entity: sensor.garage_charger_power_minute_average
+ *   energy_today_entity: sensor.garage_charger_energy_today
+ *   energy_month_entity: sensor.garage_charger_energy_this_month
+ *   current_limit_entity: number.garage_charger_current_limit   # +/- buttons
  *   charging_threshold: 50                          # W above which it counts as charging (default 50)
  *
- *   vehicle_name: Kona EV
- *   battery_entity: sensor.kona_ev_ev_battery_level
- *   range_entity: sensor.kona_ev_ev_range
- *   charge_limit_entity: number.kona_ev_ac_charging_limit
- *   charging_entity: binary_sensor.kona_ev_ev_battery_charge
- *   plug_entity: binary_sensor.kona_ev_ev_battery_plug
- *   completion_entity: sensor.kona_charge_completed_time
- *   duration_entity: sensor.kona_ev_estimated_charge_duration
- *   location_entity: device_tracker.kona_ev_location   # Optional: tells home from public charging
- *   vehicle_power_entity: sensor.garage_kona_ev_ev_charging_power   # Optional: kW shown when charging away
+ *   vehicle_name: My EV
+ *   battery_entity: sensor.my_ev_ev_battery_level
+ *   range_entity: sensor.my_ev_ev_range
+ *   charge_limit_entity: number.my_ev_ac_charging_limit
+ *   charging_entity: binary_sensor.my_ev_ev_battery_charge
+ *   plug_entity: binary_sensor.my_ev_ev_battery_plug
+ *   completion_entity: sensor.my_ev_charge_completed_time
+ *   duration_entity: sensor.my_ev_estimated_charge_duration
+ *   location_entity: device_tracker.my_ev_location   # Optional: tells home from public charging
+ *   vehicle_power_entity: sensor.garage_charger_vehicle_power   # Optional: kW shown when charging away
  *
  * When the car reports charging (or plugged in) but the home charger isn't
  * delivering power — because the car is away from home or the home charger
@@ -6713,7 +6713,7 @@ customElements.define('komodo-card-editor', KomodoCardEditor);
  *     - name: Internet
  *       monitors: [Google, Amazon, Cloudflare, Microsoft, Oracle, Bell]
  *   extra:                       # Other up/down sensors
- *     - entity: binary_sensor.minecraftmap_russellcorbett_ca
+ *     - entity: binary_sensor.minecraft_map_example_com
  *       name: Minecraft Map
  *       group: Self-hosted
  *   exclude: [Oracle Servers]
@@ -8586,7 +8586,7 @@ customElements.define('kitchen-card-editor', KitchenCardEditor);
  *   title: Bins                       # Optional
  *   entities:                         # Optional: default = every WCS sensor
  *     - sensor.waste_collection_schedule_automated_garbage_collection
- *   calendar: calendar.waste_collection_schedule_curbit_st_john_s   # Optional instead of sensors
+ *   calendar: calendar.waste_collection_schedule   # Optional instead of sensors
  *   highlight_from: 16                # Hour the day before when "put out tonight" starts (default 16)
  *   upcoming: 3                       # Later pickups listed under the next one (default 3, 0 hides)
  *   types:                            # Optional: rename / recolour bin types (matched by text)
@@ -9402,16 +9402,16 @@ customElements.define('lights-on-card-editor', LightsOnCardEditor);
  *   type: custom:family-card
  *   title: Family                       # Optional
  *   people:                             # Optional: default = every person
- *     - entity: person.russell_corbett
- *       navigate: /lovelace/russell-s-dash   # Tap: open this dashboard
+ *     - entity: person.alex
+ *       navigate: /lovelace/alex   # Tap: open this dashboard
  *       hold_action:                    # Optional, HA action format
  *         action: perform-action
  *         perform_action: input_boolean.toggle
  *         target: { entity_id: input_boolean.show_universal_wish_list }
- *       battery_entity: sensor.russell_iphone_battery   # Optional override
+ *       battery_entity: sensor.alex_iphone_battery   # Optional override
  *   cars:                               # Optional: car trackers
- *     - entity: device_tracker.kona_ev_location
- *       name: Kona
+ *     - entity: device_tracker.my_ev_location
+ *       name: Car
  *   car_radius: 150                     # Metres (default 150)
  *   hide_when_all_home: false           # Hide the whole card while everyone is home
  *   battery_low: 20                     # % shown in red (default 20)
@@ -9695,7 +9695,7 @@ class FamilyCardEditor extends window.RusstumEditor {
       { title: 'People', icon: 'mdi:account-multiple', open: false, list: {
         key: 'people',
         schema: [f.entity('entity', 'Person', 'Leave the list empty to show everyone', 'person'),
-          f.grid(f.text('name', 'Name'), f.text('navigate', 'Tap opens', 'e.g. /lovelace/russell-s-dash')),
+          f.grid(f.text('name', 'Name'), f.text('navigate', 'Tap opens', 'e.g. /lovelace/alex')),
           f.entity('battery_entity', 'Phone battery', 'Default: found from the phone tracker', 'sensor')],
         label: (p, i) => p.name || p.entity || `Person ${i + 1}`,
         newItem: () => ({}),
@@ -10476,7 +10476,7 @@ customElements.define('vehicles-card-editor', VehiclesCardEditor);
  *   upload: sensor.speedtest_upload
  *   ping: sensor.speedtest_ping
  *   ip: sensor.external_ip
- *   connectivity: binary_sensor.bell_modem_ping   # Optional: shows Online / Offline
+ *   connectivity: binary_sensor.modem_ping   # Optional: shows Online / Offline
  *   plan_download: 1000                      # Optional: your plan's speeds in Mbit/s. Results under
  *   plan_upload: 50                          #   half of plan turn amber, under a quarter red.
  *   high_ping: 100                           # ms before ping turns amber (red at twice this)
@@ -10771,7 +10771,7 @@ customElements.define('internet-card-editor', InternetCardEditor);
  * Configuration:
  *   type: custom:theater-card
  *   title: Movie Room
- *   projector: media_player.movie_room_movie_room_projector
+ *   projector: media_player.movie_room_projector
  *   receiver: media_player.home_theater
  *   sources:
  *     - name: Apple TV
@@ -10784,7 +10784,7 @@ customElements.define('internet-card-editor', InternetCardEditor);
  *       # or: apps: [{ app: Prime Video, name: Prime, icon: mdi:filmstrip, color: '#00a8e1' }]
  *     - name: Blu-ray
  *       icon: mdi:disc-player
- *       player: media_player.ubp_x800m2
+ *       player: media_player.blu_ray_player
  *       receiver_source: 4K/UHD Blu-ray
  *   activities:                                       # Optional: big buttons that run your scenes or scripts
  *     - script.movie_night_netflix
@@ -10799,6 +10799,8 @@ customElements.define('internet-card-editor', InternetCardEditor);
  *   power_switches:                                   # Optional: switched on with the room and off with "all off"
  *     - entity: switch.sync_box_power
  *       name: Sync Box
+ *   device_order: [Projector, Receiver]               # Optional: tile order by name or entity id; the rest follow.
+ *                                                     # Default follows the signal: players, receiver, power_switches, projector
  *   sound_modes: [MOVIE, MUSIC, STEREO, AUTO]         # Sound modes offered (default: these, if the receiver has them)
  *   volume_db: true                                   # Show volume in dB (default: on for Denon/Marantz)
  */
@@ -10854,8 +10856,11 @@ class TheaterCard extends HTMLElement {
       activities: thList(config.activities).map(thEnt).filter((s) => s.entity),
       switches: thList(config.switches).map(thEnt).filter((s) => s.entity),
       power_switches: thList(config.power_switches).map(thEnt).filter((s) => s.entity),
+      device_order: thList(config.device_order).map((x) => String(x).trim().toLowerCase()).filter(Boolean),
     };
     this._lastHtml = null;
+    this._dirty = true;
+    if (this._hass) this.hass = this._hass;   // redraw now, e.g. while editing the card
   }
 
   connectedCallback() {
@@ -11046,13 +11051,20 @@ class TheaterCard extends HTMLElement {
     const cur = rx?.attributes?.sound_mode;
     const modes = [...new Set([...favs.filter((m) => !modeList.length || modeList.includes(m)), ...(cur ? [cur] : [])])];
 
+    // Default order follows the signal: players → receiver → in-line boxes (e.g. Hue Sync) → projector.
     const devices = [
-      c.projector && { id: c.projector, name: 'Projector', icon: 'mdi:projector', info: (st) => st.attributes.source || st.attributes.cmode || '' },
-      c.receiver && { id: c.receiver, name: 'Receiver', icon: 'mdi:audio-video', info: (st) => st.attributes.source || '' },
       ...sources.filter((s) => s.player).map((s) => ({ id: s.player, name: s.name, icon: s.icon, info: (st) => st.attributes.app_name || '' })),
+      c.receiver && { id: c.receiver, name: 'Receiver', icon: 'mdi:audio-video', info: (st) => st.attributes.source || '' },
       ...c.power_switches.map((x) => ({ id: x.entity, name: x.name || String(h.states[x.entity]?.attributes?.friendly_name || x.entity).replace(/\s+power$/i, ''),
         icon: x.icon || (/sync/i.test(x.entity) ? 'mdi:television-ambient-light' : 'mdi:power-plug'), info: () => '', isSwitch: true })),
+      c.projector && { id: c.projector, name: 'Projector', icon: 'mdi:projector', info: (st) => st.attributes.source || st.attributes.cmode || '' },
     ].filter(Boolean).filter((d, i, arr) => arr.findIndex((x) => x.id === d.id) === i);
+    if (c.device_order.length) {
+      // Listed tiles first, in the given order; the rest keep their usual order.
+      const rank = (d, i) => { const k = c.device_order.findIndex((x) => x === d.id.toLowerCase() || x === String(d.name).toLowerCase()); return k < 0 ? c.device_order.length + i : k; };
+      const ranked = devices.map((d, i) => [rank(d, i), d]).sort((x, y) => x[0] - y[0]);
+      devices.splice(0, devices.length, ...ranked.map((x) => x[1]));
+    }
     const devHtml = devices.map((d) => {
       const st = h.states[d.id];
       const on = !thOff(st);
@@ -11404,6 +11416,8 @@ class TheaterCardEditor extends window.RusstumEditor {
         f.grid(f.toggle('volume_db', 'Show volume in dB', 'Default: on for Denon / Marantz'), f.entity('off_scene', 'Scene when turning off', '', 'scene')),
         { name: 'power_switches', label: 'Power with the room', helper: 'Switches turned on with any source and off with "all off", e.g. the Hue Sync Box',
           selector: { entity: { multiple: true, filter: [{ domain: 'switch' }, { domain: 'input_boolean' }] } } },
+        { name: 'device_order', label: 'Device tile order', helper: 'Tile names or entity ids, in order (e.g. Projector, Receiver, Sync Box). Unlisted tiles follow.',
+          selector: { text: { multiple: true } } },
       ] },
       { title: 'Sources', icon: 'mdi:video-input-hdmi', list: {
         key: 'sources',

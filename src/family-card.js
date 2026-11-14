@@ -14,16 +14,16 @@
  *   type: custom:family-card
  *   title: Family                       # Optional
  *   people:                             # Optional: default = every person
- *     - entity: person.russell_corbett
- *       navigate: /lovelace/russell-s-dash   # Tap: open this dashboard
+ *     - entity: person.alex
+ *       navigate: /lovelace/alex   # Tap: open this dashboard
  *       hold_action:                    # Optional, HA action format
  *         action: perform-action
  *         perform_action: input_boolean.toggle
  *         target: { entity_id: input_boolean.show_universal_wish_list }
- *       battery_entity: sensor.russell_iphone_battery   # Optional override
+ *       battery_entity: sensor.alex_iphone_battery   # Optional override
  *   cars:                               # Optional: car trackers
- *     - entity: device_tracker.kona_ev_location
- *       name: Kona
+ *     - entity: device_tracker.my_ev_location
+ *       name: Car
  *   car_radius: 150                     # Metres (default 150)
  *   hide_when_all_home: false           # Hide the whole card while everyone is home
  *   battery_low: 20                     # % shown in red (default 20)
@@ -307,7 +307,7 @@ class FamilyCardEditor extends window.RusstumEditor {
       { title: 'People', icon: 'mdi:account-multiple', open: false, list: {
         key: 'people',
         schema: [f.entity('entity', 'Person', 'Leave the list empty to show everyone', 'person'),
-          f.grid(f.text('name', 'Name'), f.text('navigate', 'Tap opens', 'e.g. /lovelace/russell-s-dash')),
+          f.grid(f.text('name', 'Name'), f.text('navigate', 'Tap opens', 'e.g. /lovelace/alex')),
           f.entity('battery_entity', 'Phone battery', 'Default: found from the phone tracker', 'sensor')],
         label: (p, i) => p.name || p.entity || `Person ${i + 1}`,
         newItem: () => ({}),

@@ -16,7 +16,7 @@
  *       icon: mdi:cast-variant           # Optional
  *       hide_paused: false               # Treat "paused" as inactive for this player
  *       hide_when_active:                # Hide this player while any of these are on
- *         - media_player.russell_bedroom_tv
+ *         - media_player.bedroom_tv
  *         - media_player.xboxone
  */
 

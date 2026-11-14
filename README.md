@@ -218,7 +218,7 @@ Works with the [Minecraft Server integration](https://www.home-assistant.io/inte
 
 ```yaml
 type: custom:minecraft-card
-title: Russell's Minecraft Server
+title: My Minecraft Server
 status_entity: binary_sensor.minecraft_server_status
 players_entity: sensor.minecraft_server_players_online
 ```
@@ -227,7 +227,7 @@ players_entity: sensor.minecraft_server_players_online
 
 ```yaml
 type: custom:minecraft-card
-title: Russell's Minecraft Server
+title: My Minecraft Server
 
 # Icon shown in the header (default: mdi:minecraft)
 icon: mdi:minecraft
@@ -312,10 +312,10 @@ hide_when_empty: false
 players:
   - entity: media_player.family_room_apple_tv
     name: Family Room
-  - entity: media_player.russells_bedroom
+  - entity: media_player.bedroom_speaker
     name: Sonos Beam
     hide_paused: true
-    hide_when_active: [media_player.xboxone, media_player.russell_bedroom_tv]
+    hide_when_active: [media_player.xboxone, media_player.bedroom_tv]
 ```
 
 ---
@@ -372,23 +372,23 @@ The home charger and the car together: an animated charger → car link while en
 
 ```yaml
 type: custom:ev-charger-card
-title: Corbett Home EV Charger
-charger_entity: switch.corbett_ev
-status_entity: sensor.garage_corbett_ev_status
-power_entity: sensor.corbett_ev_power_minute_average
-energy_today_entity: sensor.corbett_ev_energy_today
-energy_month_entity: sensor.corbett_ev_energy_this_month
-current_limit_entity: number.garage_corbett_ev_current_limit
-vehicle_name: Kona EV
-battery_entity: sensor.kona_ev_ev_battery_level
-range_entity: sensor.kona_ev_ev_range
-charge_limit_entity: number.kona_ev_ac_charging_limit
-charging_entity: binary_sensor.kona_ev_ev_battery_charge
-plug_entity: binary_sensor.kona_ev_ev_battery_plug
-completion_entity: sensor.kona_charge_completed_time
-duration_entity: sensor.kona_ev_estimated_charge_duration
-location_entity: device_tracker.kona_ev_location          # optional
-vehicle_power_entity: sensor.garage_kona_ev_ev_charging_power   # optional
+title: Garage EV Charger
+charger_entity: switch.garage_charger
+status_entity: sensor.garage_charger_status
+power_entity: sensor.garage_charger_power_minute_average
+energy_today_entity: sensor.garage_charger_energy_today
+energy_month_entity: sensor.garage_charger_energy_this_month
+current_limit_entity: number.garage_charger_current_limit
+vehicle_name: My EV
+battery_entity: sensor.my_ev_ev_battery_level
+range_entity: sensor.my_ev_ev_range
+charge_limit_entity: number.my_ev_ac_charging_limit
+charging_entity: binary_sensor.my_ev_ev_battery_charge
+plug_entity: binary_sensor.my_ev_ev_battery_plug
+completion_entity: sensor.my_ev_charge_completed_time
+duration_entity: sensor.my_ev_estimated_charge_duration
+location_entity: device_tracker.my_ev_location          # optional
+vehicle_power_entity: sensor.garage_charger_vehicle_power   # optional
 ```
 
 When the car is charging somewhere else (it reports charging, the home charger isn't delivering power, and the car is away or the home charger says nothing is connected), the card says **Charging away** and shows where, using the car's own charging power, instead of drawing the home charger as active.
@@ -440,7 +440,7 @@ groups:
   - name: Internet
     monitors: [Google, Amazon, Cloudflare, Microsoft, Oracle, Bell]
 extra:
-  - entity: binary_sensor.minecraftmap_russellcorbett_ca
+  - entity: binary_sensor.minecraft_map_example_com
     name: Minecraft Map
     group: Self-hosted
 ```
@@ -577,11 +577,11 @@ Everyone at a glance: photo with a coloured ring (home, in a zone, heading home,
 type: custom:family-card
 title: Family
 people:
-  - entity: person.russell_corbett
-    navigate: /lovelace/russell-s-dash
+  - entity: person.alex
+    navigate: /lovelace/alex
 cars:
-  - entity: device_tracker.kona_ev_location
-    name: Kona
+  - entity: device_tracker.my_ev_location
+    name: Car
 hide_when_all_home: true
 ```
 
@@ -644,7 +644,7 @@ Download, upload and ping from the Speedtest.net integration, each with a **spar
 
 ```yaml
 type: custom:internet-card
-connectivity: binary_sensor.bell_modem_ping   # optional Online/Offline pill
+connectivity: binary_sensor.modem_ping   # optional Online/Offline pill
 plan_download: 500      # optional: under half of plan turns amber, under a quarter red
 plan_upload: 50
 high_ping: 100          # ms before ping turns amber (red at double)
@@ -668,7 +668,7 @@ A home theater on one card. The top is a **screen**: what's playing on the activ
 ```yaml
 type: custom:theater-card
 title: Movie Room
-projector: media_player.movie_room_movie_room_projector
+projector: media_player.movie_room_projector
 receiver: media_player.home_theater
 sources:
   - name: Apple TV
@@ -676,7 +676,7 @@ sources:
     scene: scene.apple_tv
     apps: [Netflix, Prime Video, Fibe TV, Swiftfin, Spotify]
   - name: Blu-ray
-    player: media_player.ubp_x800m2
+    player: media_player.blu_ray_player
   - name: Bell TV
     player: media_player.fibetv
     icon: mdi:television-classic
@@ -690,6 +690,7 @@ scenes: [scene.4k_3d_movie, scene.movie_room_sync]
 switches: [switch.sync_box_light_sync]
 off_scene: scene.movie_room_off
 power_switches: [switch.sync_box_power]   # on with any source, off with "all off"
+device_order: [Projector, Receiver]   # optional tile order (names or ids); default follows the signal: players → receiver → power_switches → projector
 sound_modes: [MOVIE, MUSIC, STEREO, AUTO, DIRECT]
 ```
 

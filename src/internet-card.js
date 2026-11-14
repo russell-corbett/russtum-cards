@@ -16,7 +16,7 @@
  *   upload: sensor.speedtest_upload
  *   ping: sensor.speedtest_ping
  *   ip: sensor.external_ip
- *   connectivity: binary_sensor.bell_modem_ping   # Optional: shows Online / Offline
+ *   connectivity: binary_sensor.modem_ping   # Optional: shows Online / Offline
  *   plan_download: 1000                      # Optional: your plan's speeds in Mbit/s. Results under
  *   plan_upload: 50                          #   half of plan turn amber, under a quarter red.
  *   high_ping: 100                           # ms before ping turns amber (red at twice this)

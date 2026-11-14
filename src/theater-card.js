@@ -12,7 +12,7 @@
  * Configuration:
  *   type: custom:theater-card
  *   title: Movie Room
- *   projector: media_player.movie_room_movie_room_projector
+ *   projector: media_player.movie_room_projector
  *   receiver: media_player.home_theater
  *   sources:
  *     - name: Apple TV
@@ -25,7 +25,7 @@
  *       # or: apps: [{ app: Prime Video, name: Prime, icon: mdi:filmstrip, color: '#00a8e1' }]
  *     - name: Blu-ray
  *       icon: mdi:disc-player
- *       player: media_player.ubp_x800m2
+ *       player: media_player.blu_ray_player
  *       receiver_source: 4K/UHD Blu-ray
  *   activities:                                       # Optional: big buttons that run your scenes or scripts
  *     - script.movie_night_netflix
@@ -40,6 +40,8 @@
  *   power_switches:                                   # Optional: switched on with the room and off with "all off"
  *     - entity: switch.sync_box_power
  *       name: Sync Box
+ *   device_order: [Projector, Receiver]               # Optional: tile order by name or entity id; the rest follow.
+ *                                                     # Default follows the signal: players, receiver, power_switches, projector
  *   sound_modes: [MOVIE, MUSIC, STEREO, AUTO]         # Sound modes offered (default: these, if the receiver has them)
  *   volume_db: true                                   # Show volume in dB (default: on for Denon/Marantz)
  */
@@ -95,8 +97,11 @@ class TheaterCard extends HTMLElement {
       activities: thList(config.activities).map(thEnt).filter((s) => s.entity),
       switches: thList(config.switches).map(thEnt).filter((s) => s.entity),
       power_switches: thList(config.power_switches).map(thEnt).filter((s) => s.entity),
+      device_order: thList(config.device_order).map((x) => String(x).trim().toLowerCase()).filter(Boolean),
     };
     this._lastHtml = null;
+    this._dirty = true;
+    if (this._hass) this.hass = this._hass;   // redraw now, e.g. while editing the card
   }
 
   connectedCallback() {
@@ -287,13 +292,20 @@ class TheaterCard extends HTMLElement {
     const cur = rx?.attributes?.sound_mode;
     const modes = [...new Set([...favs.filter((m) => !modeList.length || modeList.includes(m)), ...(cur ? [cur] : [])])];
 
+    // Default order follows the signal: players → receiver → in-line boxes (e.g. Hue Sync) → projector.
     const devices = [
-      c.projector && { id: c.projector, name: 'Projector', icon: 'mdi:projector', info: (st) => st.attributes.source || st.attributes.cmode || '' },
-      c.receiver && { id: c.receiver, name: 'Receiver', icon: 'mdi:audio-video', info: (st) => st.attributes.source || '' },
       ...sources.filter((s) => s.player).map((s) => ({ id: s.player, name: s.name, icon: s.icon, info: (st) => st.attributes.app_name || '' })),
+      c.receiver && { id: c.receiver, name: 'Receiver', icon: 'mdi:audio-video', info: (st) => st.attributes.source || '' },
       ...c.power_switches.map((x) => ({ id: x.entity, name: x.name || String(h.states[x.entity]?.attributes?.friendly_name || x.entity).replace(/\s+power$/i, ''),
         icon: x.icon || (/sync/i.test(x.entity) ? 'mdi:television-ambient-light' : 'mdi:power-plug'), info: () => '', isSwitch: true })),
+      c.projector && { id: c.projector, name: 'Projector', icon: 'mdi:projector', info: (st) => st.attributes.source || st.attributes.cmode || '' },
     ].filter(Boolean).filter((d, i, arr) => arr.findIndex((x) => x.id === d.id) === i);
+    if (c.device_order.length) {
+      // Listed tiles first, in the given order; the rest keep their usual order.
+      const rank = (d, i) => { const k = c.device_order.findIndex((x) => x === d.id.toLowerCase() || x === String(d.name).toLowerCase()); return k < 0 ? c.device_order.length + i : k; };
+      const ranked = devices.map((d, i) => [rank(d, i), d]).sort((x, y) => x[0] - y[0]);
+      devices.splice(0, devices.length, ...ranked.map((x) => x[1]));
+    }
     const devHtml = devices.map((d) => {
       const st = h.states[d.id];
       const on = !thOff(st);
@@ -645,6 +657,8 @@ class TheaterCardEditor extends window.RusstumEditor {
         f.grid(f.toggle('volume_db', 'Show volume in dB', 'Default: on for Denon / Marantz'), f.entity('off_scene', 'Scene when turning off', '', 'scene')),
         { name: 'power_switches', label: 'Power with the room', helper: 'Switches turned on with any source and off with "all off", e.g. the Hue Sync Box',
           selector: { entity: { multiple: true, filter: [{ domain: 'switch' }, { domain: 'input_boolean' }] } } },
+        { name: 'device_order', label: 'Device tile order', helper: 'Tile names or entity ids, in order (e.g. Projector, Receiver, Sync Box). Unlisted tiles follow.',
+          selector: { text: { multiple: true } } },
       ] },
       { title: 'Sources', icon: 'mdi:video-input-hdmi', list: {
         key: 'sources',

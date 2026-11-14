@@ -3,7 +3,7 @@
  *
  * Configuration:
  *   type: custom:minecraft-card
- *   title: Russell's Minecraft Server    # Card title (optional)
+ *   title: My Minecraft Server    # Card title (optional)
  *   status_entity: binary_sensor.mc_online          # online/off — binary or text
  *   players_entity: sensor.mc_players_online        # current player count
  *   max_players_entity: sensor.mc_max_players       # max player slots (optional)
@@ -401,7 +401,7 @@ class MinecraftCard extends HTMLElement {
 
   static getStubConfig() {
     return {
-      title: "Russell's Minecraft Server",
+      title: "My Minecraft Server",
       status_entity: 'binary_sensor.minecraft_server_status',
       players_entity: 'sensor.minecraft_server_players_online',
       max_players_entity: 'sensor.minecraft_server_players_max',

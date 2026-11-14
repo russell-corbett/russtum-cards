@@ -16,7 +16,7 @@
  *     - name: Internet
  *       monitors: [Google, Amazon, Cloudflare, Microsoft, Oracle, Bell]
  *   extra:                       # Other up/down sensors
- *     - entity: binary_sensor.minecraftmap_russellcorbett_ca
+ *     - entity: binary_sensor.minecraft_map_example_com
  *       name: Minecraft Map
  *       group: Self-hosted
  *   exclude: [Oracle Servers]

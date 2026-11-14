@@ -10,24 +10,24 @@
  * Configuration:
  *   type: custom:ev-charger-card
  *   title: Home Charger
- *   charger_entity: switch.corbett_ev               # Enable/disable switch (tap the power button)
- *   status_entity: sensor.garage_corbett_ev_status  # Optional text status
- *   power_entity: sensor.corbett_ev_power_minute_average
- *   energy_today_entity: sensor.corbett_ev_energy_today
- *   energy_month_entity: sensor.corbett_ev_energy_this_month
- *   current_limit_entity: number.garage_corbett_ev_current_limit   # +/- buttons
+ *   charger_entity: switch.garage_charger               # Enable/disable switch (tap the power button)
+ *   status_entity: sensor.garage_charger_status  # Optional text status
+ *   power_entity: sensor.garage_charger_power_minute_average
+ *   energy_today_entity: sensor.garage_charger_energy_today
+ *   energy_month_entity: sensor.garage_charger_energy_this_month
+ *   current_limit_entity: number.garage_charger_current_limit   # +/- buttons
  *   charging_threshold: 50                          # W above which it counts as charging (default 50)
  *
- *   vehicle_name: Kona EV
- *   battery_entity: sensor.kona_ev_ev_battery_level
- *   range_entity: sensor.kona_ev_ev_range
- *   charge_limit_entity: number.kona_ev_ac_charging_limit
- *   charging_entity: binary_sensor.kona_ev_ev_battery_charge
- *   plug_entity: binary_sensor.kona_ev_ev_battery_plug
- *   completion_entity: sensor.kona_charge_completed_time
- *   duration_entity: sensor.kona_ev_estimated_charge_duration
- *   location_entity: device_tracker.kona_ev_location   # Optional: tells home from public charging
- *   vehicle_power_entity: sensor.garage_kona_ev_ev_charging_power   # Optional: kW shown when charging away
+ *   vehicle_name: My EV
+ *   battery_entity: sensor.my_ev_ev_battery_level
+ *   range_entity: sensor.my_ev_ev_range
+ *   charge_limit_entity: number.my_ev_ac_charging_limit
+ *   charging_entity: binary_sensor.my_ev_ev_battery_charge
+ *   plug_entity: binary_sensor.my_ev_ev_battery_plug
+ *   completion_entity: sensor.my_ev_charge_completed_time
+ *   duration_entity: sensor.my_ev_estimated_charge_duration
+ *   location_entity: device_tracker.my_ev_location   # Optional: tells home from public charging
+ *   vehicle_power_entity: sensor.garage_charger_vehicle_power   # Optional: kW shown when charging away
  *
  * When the car reports charging (or plugged in) but the home charger isn't
  * delivering power — because the car is away from home or the home charger

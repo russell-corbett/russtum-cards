@@ -16,7 +16,7 @@
  *   title: Bins                       # Optional
  *   entities:                         # Optional: default = every WCS sensor
  *     - sensor.waste_collection_schedule_automated_garbage_collection
- *   calendar: calendar.waste_collection_schedule_curbit_st_john_s   # Optional instead of sensors
+ *   calendar: calendar.waste_collection_schedule   # Optional instead of sensors
  *   highlight_from: 16                # Hour the day before when "put out tonight" starts (default 16)
  *   upcoming: 3                       # Later pickups listed under the next one (default 3, 0 hides)
  *   types:                            # Optional: rename / recolour bin types (matched by text)
