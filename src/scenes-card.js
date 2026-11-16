@@ -17,6 +17,7 @@
  *                                    # white, black, grey, or a hex colour like "#ff8800"
  *     - entity: script.movie_night
  *       tap_action: { action: more-info }   # Optional: any HA tap_action
+ *   embedded: true                   # Optional: no card frame (used inside other cards)
  *
  * Default tap: scene.turn_on for scenes, script.turn_on for scripts, toggle for anything else.
  */
@@ -69,7 +70,8 @@ class ScenesCard extends HTMLElement {
     const html = `
       <style>
         :host { display: block; min-width: 0; }
-        ha-card { padding: 12px 8px; overflow: hidden; }
+        ha-card, .bare { display: block; padding: 12px 8px; overflow: hidden; }
+        .bare { padding: 0; }
         .title { margin: 0 8px 8px; font-size: 1.1em; font-weight: 500; color: var(--primary-text-color); }
         .row { display: flex; gap: 4px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding: 0 4px;
           scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
@@ -98,11 +100,11 @@ class ScenesCard extends HTMLElement {
         @media (prefers-reduced-motion: reduce) { .sc.fired .ic, .sc.fired .ic::after { animation: none; } }
         .empty { padding: 8px; color: var(--secondary-text-color); }
       </style>
-      <ha-card>
+      <${c.embedded ? 'div class="bare"' : 'ha-card'}>
         ${c.title ? `<h2 class="title">${scEsc(c.title)}</h2>` : ''}
         ${items ? `<div class="row" role="group" aria-label="${scEsc(c.title || 'Scenes')}">${items}</div>`
           : '<div class="empty">No scenes configured</div>'}
-      </ha-card>`;
+      </${c.embedded ? 'div' : 'ha-card'}>`;
     if (html === this._lastHtml) return;
     this._lastHtml = html;
     this.shadowRoot.innerHTML = html;

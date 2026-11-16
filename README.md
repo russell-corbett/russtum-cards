@@ -760,9 +760,176 @@ scenes:
 
 ---
 
+## Now Playing Card
+
+**What's playing anywhere.** Every listed media player that is playing or paused, stacked in priority order: the first is a large **hero** row (blurred artwork, title, series / artist, room, progress bar, previous / play-pause / next when the player supports them), the rest are compact rows. Playing players come before paused ones. The card hides itself when nothing is playing.
+
+It understands **JellyHA** user players (`title`, `image_url` / `backdrop_url`, `progress_percent`, position ticks, `device_name`, `user_name`) as well as Apple TV, Music Assistant, Sonos, Spotify, Cast, HEOS and Xbox players. Tap a row for its details; long-press (or Shift+Enter) opens `navigation_path`.
+
+```yaml
+type: custom:now-playing-card
+entities:
+  - media_player.jellyha_alex
+  - media_player.jellyha_sam
+  - media_player.family_room_apple_tv
+  - media_player.movie_room_apple_tv
+  - entity: media_player.home_theater_heos
+    name: Movie Room
+  - media_player.bedroom_speaker_ma
+hide_when_idle: true
+max_items: 3
+navigation_path: /lovelace/media
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `entities` | required | Media players in priority order. Plain IDs or `{entity, name}` (`name` = room label) |
+| `hide_when_idle` | `true` | Hide the card when nothing is playing (always shown in the editor) |
+| `max_items` | `3` | Rows shown |
+| `navigation_path` | — | Long-press target |
+| `title` | — | Optional heading |
+
+---
+
+## Media Shelf Card
+
+Poster rows that scroll sideways (with snap) for a Media tab, plus optional header chips. Each row has a `source`:
+
+- **`jellyfin_browse`**: HA's media browser on a media player, by default JellyHA's `media_player.jellyha_library_browser`. The folders JellyHA exposes are `jellyha://recent` (Recently added), `jellyha://movies`, `jellyha://series` and `jellyha://favorites`. JellyHA has **no "Continue watching" folder**. Episode titles like "Show S01E02 - Name" are split into title and subtitle. Refreshed every 15 minutes.
+- **`calendar`**: `calendar.get_events` over the next `days` (default 7), merged and sorted, e.g. Radarr and Sonarr for **Coming this week**. Calendars carry no artwork, so these tiles get a generated poster. Refreshed every 30 minutes.
+
+```yaml
+type: custom:media-shelf-card
+chips:
+  - {entity: sensor.overseerr_processing_requests, name: Processing, icon: mdi:progress-download}
+  - {entity: sensor.overseerr_pending_requests, name: Pending, icon: mdi:clock-outline}
+rows:
+  - title: Recently added
+    source: jellyfin_browse
+    media_content_id: jellyha://recent
+    media_content_type: channels
+  - title: Coming this week
+    source: calendar
+    entities: [calendar.radarr, calendar.sonarr]
+    days: 7
+  - title: Favourites
+    source: jellyfin_browse
+    media_content_id: jellyha://favorites
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `rows[].title` | — | Row heading |
+| `rows[].source` | `jellyfin_browse` | `jellyfin_browse` or `calendar` |
+| `rows[].entity` | `media_player.jellyha_library_browser` | Player to browse |
+| `rows[].media_content_id` / `media_content_type` | root | Folder to show (see the IDs above) |
+| `rows[].entities` | — | Calendars, for `calendar` rows |
+| `rows[].days` | `7` | Days ahead, for `calendar` rows |
+| `rows[].limit` | `20` | Most posters per row |
+| `rows[].tap_action` | more-info | Any HA tap action. Default: more-info on the row's player or calendar |
+| `chips` | — | Header chips: `{entity, name, icon}` |
+| `poster_width` | `112` | Poster width in px |
+| `title` | — | Optional heading |
+
+---
+
+## Room Remote Card
+
+A phone-first remote for a media room, built for the dark: big touch targets and an optional **dimmed, low-contrast** look. From the top:
+
+- **Now playing** on the room's player: poster, title, progress and time left.
+- **Status chips** (receiver input, Blu-ray / Fibe active…). Tap for details.
+- **Selects as segmented pills**, e.g. the projector's input, aspect, colour mode and lamp mode. They dim while the projector is off and its selects are unavailable.
+- **Action buttons**: presses a `button`, runs a `script` or `scene`, toggles anything else. A running script is highlighted.
+- **Scenes strip**: the Scenes card, built in.
+- **D-pad** with OK, plus Menu / Home / Play-pause, sent with `remote.send_command`. Arrows repeat while held.
+
+```yaml
+type: custom:room-remote-card
+title: Movie Room
+media_player: media_player.movie_room_apple_tv
+remote: remote.movie_room_apple_tv
+dark_mode_dim: true
+status:
+  - media_player.home_theater
+  - {entity: binary_sensor.movie_room_blu_ray_active, name: Blu-ray}
+  - {entity: binary_sensor.movie_room_fibe_active, name: Fibe}
+selects:
+  - {entity: select.movie_room_projector_input, name: Input}
+  - {entity: select.movie_room_projector_aspect, name: Aspect}
+  - {entity: select.movie_room_projector_color_mode, name: Colour}
+  - {entity: select.movie_room_projector_lamp_mode, name: Lamp}
+buttons:
+  - {entity: script.movie_room_watch, name: Watch, icon: mdi:play}
+  - {entity: button.movie_room_projector_switch_to_hdmi1, name: HDMI 1, icon: mdi:video-input-hdmi}
+  - {entity: script.movie_room_off, name: All off, icon: mdi:power}
+scenes:
+  - {entity: scene.movie_room_regular_movie, name: Movie, icon: mdi:movie, color: black}
+  - {entity: scene.movie_room_just_bar, name: Bar, icon: mdi:beer, color: yellow}
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `media_player` | `media_player.movie_room_apple_tv` | Now-playing source |
+| `remote` | — | Remote for the D-pad (hidden without one) |
+| `dark_mode_dim` | `false` | Lower contrast and saturation |
+| `status` | — | Entities shown as chips: IDs or `{entity, name, icon}` |
+| `selects` | — | `select` entities shown as pills: IDs or `{entity, name}` |
+| `buttons` | — | `{entity, name, icon, tap_action}` |
+| `scenes` | — | Same format as the Scenes card |
+| `commands` | Apple TV names | Override command names: `up, down, left, right, select, menu, home, play_pause` |
+| `title` | — | Optional heading |
+
+The Scenes card also takes `embedded: true` (no card frame), which this card uses for its scenes strip.
+
+---
+
+## Jellyfin Stats Card
+
+Library and watch stats from **JellyHA**, for a Stats tab:
+
+- **KPI tiles:** titles in the library (with movie / series / episode counts), storage, and who's watching now.
+- **"Titles added this month"**, from the recorder's long-term statistics of the library count. It falls back to recent history, which only reaches back about 10 days.
+- **Watched rings** for movies, series and episodes. If a percentage sensor is unavailable, the ring is worked out from the watched / unwatched counts instead.
+- **Latest movie and episode added**, with posters.
+
+Sensors are **found automatically** by JellyHA's names, with or without an area prefix such as `server_room_`. Override any of them under `entities`, or with flat `<role>_entity` keys, which is what the visual editor writes.
+
+```yaml
+type: custom:jellyfin-stats-card
+title: Jellyfin
+added_this_month: true
+entities:                       # all optional
+  library: sensor.jellyha_library
+  storage: sensor.jellyha_library_movies_storage_size
+  active_sessions: sensor.jellyha_active_sessions
+  movies_watched_pct: sensor.jellyha_library_movies_watched_percentage
+  series_watched_pct: sensor.jellyha_library_series_watched_percentage
+  episodes_watched_pct: sensor.jellyha_library_episodes_watched_percentage
+  latest_movie: sensor.jellyha_latest_movie
+  latest_episode: sensor.jellyha_latest_episode
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `entities.<role>` | auto | `library`, `storage`, `active_sessions`, `movies_watched_pct`, `series_watched_pct`, `episodes_watched_pct`, `watched_movies`, `unwatched_movies`, `watched_episodes`, `unwatched_episodes`, `latest_movie`, `latest_episode` |
+| `added_this_month` | `true` | Count of titles added since the 1st |
+| `watch_time` | — | Per-person watch-time sensors, `{entity, name}` (see below) |
+| `title` | — | Optional heading |
+
+**Watch time per person.** JellyHA doesn't report it: its sensors and services cover the library, sessions and playback control, not viewing history. The card therefore doesn't show watch time on its own and never estimates it. If you expose it some other way, for example a REST sensor that reads the Jellyfin **Playback Reporting** plugin's API, list one sensor per person and the card draws a bar for each. Values can be in hours, minutes or seconds; the card reads the unit.
+
+```yaml
+watch_time:
+  - {entity: sensor.alex_jellyfin_watch_hours, name: Alex}
+  - {entity: sensor.sam_jellyfin_watch_hours, name: Sam}
+```
+
+---
+
 ## Development
 
-Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
+Edit the cards in `src/` and push to `master`. Bump `VERSION` for each release; it's shown in the browser console banner and as `window.RusstumCards.version`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
 
 To build locally instead (for testing before you push):
 

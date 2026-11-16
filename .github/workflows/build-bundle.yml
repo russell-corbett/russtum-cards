@@ -5,9 +5,9 @@ name: Build bundle
 on:
   push:
     branches: [master]
-    paths: ['src/**', 'build.sh']
+    paths: ['src/**', 'build.sh', 'VERSION']
   pull_request:
-    paths: ['src/**', 'build.sh']
+    paths: ['src/**', 'build.sh', 'VERSION']
   workflow_dispatch:
 
 permissions:
