@@ -15,82 +15,90 @@ type: module
 
 ## nas-card
 
-Displays NAS drive bays with live/dead status, a drive health bar, temperature, uptime, and network link status.
+Everything a NAS reports on one card, built around the **QNAP** integration but working with any NAS that exposes sensors:
+
+- **Drive bays** with live / failed / offline state and **per-drive temperature**. Tap a bay for its **model and serial number**; hovering shows them too. Bays beyond the drive list show **Empty**.
+- A **condition pill** with the worst thing going on: **Offline** › NAS status problem › drive not OK › volume nearly full › running hot › OK.
+- **Temperature, CPU, memory** (with "0.31 / 0.98 GiB") and **uptime**.
+- **One bar per volume**: "681 GiB of 991 GiB (69% · 310 GiB free)". Units come from each sensor (GiB, TiB, GB…) and sizes show in TiB from 1024 GiB. The bar turns amber at `volume_warn` and red at `volume_high`.
+- **Network links** with live **↑ / ↓ speeds**, auto-scaled to B/s, KiB/s or MiB/s.
+
+Tap any row to open its entity. State matching ignores capitalisation (`Up`, `OK`, `good`).
 
 ### Minimal config
 
 ```yaml
 type: custom:nas-card
 title: My NAS
-total_drives: 8
+total_drives: 4
 drives:
   - entity: sensor.nas_drive_1_status
   - entity: sensor.nas_drive_2_status
 ```
 
-### Full config
+### QNAP example
 
 ```yaml
 type: custom:nas-card
 title: My NAS
-
-# Total number of drive bays to display (empty slots fill remaining space)
-total_drives: 8
-
-# States that count as a live/healthy drive (default: active, on)
-live_states:
-  - active
-  - on
-
-# NAS status entity — drives the NAS icon color
-# If omitted, icon color is based on drive health percentage instead
-status_entity: sensor.nas_status
-status_ok_states:           # default: online, running, active, ok, on, healthy
-  - online
-  - running
-status_warn_states:         # default: degraded, warning, degrading
-  - degraded
-  - warning
-
-# Drive list — each entry needs at least an entity
+status_entity: sensor.mynas_status
+total_drives: 4
+live_states: [OK]
 drives:
-  - entity: sensor.nas_drive_1_status
-    name: Bay 1              # optional, defaults to entity name
-  - entity: sensor.nas_drive_2_status
+  - entity: sensor.mynas_smart_status_drive_0_1
+    temperature_entity: sensor.mynas_temperature_drive_0_1
+    name: Bay 1
+  - entity: sensor.mynas_smart_status_drive_0_2
+    temperature_entity: sensor.mynas_temperature_drive_0_2
     name: Bay 2
-  - entity: sensor.nas_drive_3_status
-    name: Bay 3
-  - entity: sensor.nas_drive_4_status
-    name: Bay 4
-
-# Temperature sensor
-temperature_entity: sensor.nas_cpu_temp
-temperature_warn: 60        # °C — turns orange (default: 60)
-temperature_high: 75        # °C — turns red (default: 75)
-
-# Uptime — accepts seconds (numeric) or an ISO datetime string
-uptime_entity: sensor.nas_uptime
-
-# Network interfaces — displayed as pills in the card header
-network_live_states:        # states that count as link-up (default: on, connected, up)
-  - on
-  - connected
-  - up
+temperature_entity: sensor.mynas_system_temperature
+cpu_entity: sensor.mynas_cpu_usage
+memory_entity: sensor.mynas_memory_usage
+memory_used_entity: sensor.mynas_memory_used
+memory_size_entity: sensor.mynas_memory_size
+uptime_entity: sensor.mynas_uptime
 network_interfaces:
-  - entity: sensor.nas_eth0_link
-    name: eth0
-  - entity: sensor.nas_eth1_link
-    name: eth1
+  - {entity: sensor.mynas_network_link_eth0, name: eth0, up_entity: sensor.mynas_network_up_eth0, down_entity: sensor.mynas_network_down_eth0}
+  - {entity: sensor.mynas_network_link_eth1, name: eth1, up_entity: sensor.mynas_network_up_eth1, down_entity: sensor.mynas_network_down_eth1}
+volumes:
+  - {name: Media, used_pct_entity: sensor.mynas_volume_used_media, free_entity: sensor.mynas_free_space_media, size_entity: sensor.mynas_volume_size_media}
+  - {name: Backups, used_pct_entity: sensor.mynas_volume_used_backups, free_entity: sensor.mynas_free_space_backups, size_entity: sensor.mynas_volume_size_backups}
 ```
 
-### Drive icon states
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `title` | `NAS` | Card title |
+| `status_entity` | — | Overall NAS status; drives the pill and icon colour |
+| `status_ok_states` | `online, running, active, ok, on, healthy, good, normal, ready` | Healthy status values |
+| `status_warn_states` | `degraded, warning, degrading` | Shown amber. **Any other value is a problem** (red); `unavailable` / `unknown` show **Offline** |
+| `total_drives` | number of drives | Bay count; extra bays show "Empty" |
+| `live_states` | `active, on, ok, good, healthy, normal` | Drive states that count as healthy |
+| `drives[]` | — | `entity` (status; its `Model` and `Serial #` attributes are shown), `name`, `temperature_entity` |
+| `drive_entity_prefix` / `drive_entity_suffix` | — | Also add every entity matching this prefix / suffix |
+| `drive_temp_warn` / `drive_temp_high` | `45` / `55` | Drive °C shown amber / red |
+| `temperature_entity` | — | System temperature |
+| `temperature_warn` / `temperature_high` | `60` / `75` | System °C shown amber / red |
+| `cpu_entity`, `memory_entity` | — | Percent sensors |
+| `memory_used_entity`, `memory_size_entity` | — | For the "used / size GiB" line (any byte unit) |
+| `uptime_entity` | — | Seconds, a boot timestamp, or text |
+| `volumes[]` | — | `name`, `used_pct_entity`, `free_entity`, `size_entity` (any of the last three; the rest is worked out) |
+| `volume_warn` / `volume_high` | `80` / `90` | % used shown amber / red. Only `volume_high` raises the pill |
+| `network_interfaces[]` | — | `entity` (link state), `name`, `up_entity`, `down_entity` (rate sensors, any unit; MiB/s assumed if none) |
+| `network_entity_prefix` / `network_entity_suffix` | — | Also add every link entity matching these |
+| `network_live_states` | `on, connected, up` | Link-up states |
+
+### Drive bay states
 
 | State | Colour | Meaning |
 |---|---|---|
-| Live (`live_states`) | Green | Drive active |
-| Any other state | Red | Drive dead / failed |
-| `unavailable` / `unknown` | Orange | State unknown |
-| `empty` (no entity) | Grey | Empty bay |
+| In `live_states` | Green | Healthy |
+| Any other state | Red | Failed / needs attention |
+| `unavailable` / `unknown` | Orange | Offline |
+| No entity | Grey, "Empty" | Empty bay |
+
+The drive-health bar from earlier versions is gone: the summary line ("2 / 2 drives OK · 4 bays") and the condition pill replace it, and empty bays no longer count against health.
 
 ---
 
