@@ -415,6 +415,97 @@
   window.RusstumEditor = RusstumEditor;
 })();
 
+// ═══ src/shared.js ═══
+/**
+ * Russtum Cards — small runtime helpers shared by several cards.
+ *
+ *   RusstumShared.color('blue')      → { rgb, solid }  CSS for a named colour or hex
+ *   RusstumShared.act(el, hass, action, entity)        run a tap_action
+ *
+ * Colours: named colours use HA's theme variables (--rgb-blue-color …) so
+ * themes can restyle them, with Material fallbacks when a theme doesn't set
+ * them. `rgb` is an "r, g, b" triplet for rgba(); `special` flags white and
+ * black, which need an outline to stay visible on light / dark themes.
+ *
+ * Loaded after editor-kit.js and before any card (build.sh).
+ */
+(() => {
+  if (window.RusstumShared) return;
+
+  const NAMED = {
+    blue: '33, 150, 243', red: '244, 67, 54', yellow: '255, 235, 59', green: '76, 175, 80',
+    purple: '156, 39, 176', pink: '233, 30, 99', teal: '0, 150, 136', orange: '255, 152, 0',
+    grey: '158, 158, 158', white: '255, 255, 255', black: '0, 0, 0',
+    amber: '255, 193, 7', cyan: '0, 188, 212', indigo: '63, 81, 181', 'light-blue': '3, 169, 244',
+    'light-green': '139, 195, 74', lime: '205, 220, 57', 'deep-orange': '255, 87, 34',
+    'deep-purple': '103, 58, 183', brown: '121, 85, 72',
+  };
+  const ALIAS = { gray: 'grey' };
+
+  function hexToRgb(hex) {
+    let h = hex.replace('#', '');
+    if (h.length === 3 || h.length === 4) h = h.split('').map((c) => c + c).join('');
+    if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(h)) return null;
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(', ');
+  }
+
+  function color(input, fallback = 'blue') {
+    const raw = String(input ?? '').trim().toLowerCase();
+    const name = ALIAS[raw] || raw;
+    if (NAMED[name]) {
+      return {
+        rgb: `var(--rgb-${name}-color, ${NAMED[name]})`,
+        special: name === 'white' || name === 'black' ? name : null,
+      };
+    }
+    if (raw.startsWith('#')) {
+      const rgb = hexToRgb(raw);
+      if (rgb) {
+        const [r, g, b] = rgb.split(',').map(Number);
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        return { rgb, special: lum > 0.92 ? 'white' : lum < 0.08 ? 'black' : null };
+      }
+    }
+    if (raw) console.warn(`russtum-cards: unknown colour "${input}", using ${fallback}`);
+    return color(fallback, 'blue');
+  }
+
+  // Names for colour pickers in the visual editors.
+  const COLOR_OPTIONS = ['blue', 'red', 'yellow', 'green', 'purple', 'pink', 'teal', 'orange', 'white', 'black', 'grey']
+    .map((c) => ({ value: c, label: c[0].toUpperCase() + c.slice(1) }));
+
+  // The tap_action subset HA's own cards support most often.
+  function act(el, hass, a, entity) {
+    a = a || {};
+    switch (a.action) {
+      case 'navigate':
+        if (!a.navigation_path) return;
+        history.pushState(null, '', a.navigation_path);
+        window.dispatchEvent(new CustomEvent('location-changed', { detail: { replace: !!a.navigation_replace } }));
+        return;
+      case 'url':
+        if (a.url_path) window.open(a.url_path, '_blank', 'noopener');
+        return;
+      case 'toggle':
+        hass.callService('homeassistant', 'toggle', { entity_id: a.entity || entity });
+        return;
+      case 'perform-action':
+      case 'call-service': {
+        const [d, s] = String(a.perform_action || a.service || '').split('.');
+        if (d && s) hass.callService(d, s, a.data || a.service_data || {}, a.target);
+        return;
+      }
+      case 'more-info':
+        el.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: a.entity || entity }, bubbles: true, composed: true }));
+        return;
+      case 'none':
+      default:
+    }
+  }
+
+  window.RusstumShared = { color, COLOR_OPTIONS, act };
+})();
+
 // ═══ src/nas-card.js ═══
 (() => {
 /**
@@ -11448,4 +11539,520 @@ class TheaterCardEditor extends window.RusstumEditor {
 customElements.define('theater-card-editor', TheaterCardEditor);
 })();
 
-console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer · Media · Security · Parcels · Flights · EV · Batteries · Komodo · Services · HA Health · Rooms · Climate · Kitchen · Bins · Travel · Lights On · Family · Floor Lights · Vehicles · Internet · Theater ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');
+// ═══ src/welcome-card.js ═══
+(() => {
+/**
+ * Welcome Card for Home Assistant
+ *
+ * A greeting for the time of day ("Good evening, Alex"), the current weather
+ * with today's high / low, and an optional row of navigation buttons that can
+ * fold away. The folded state is remembered per browser, so no helper entity
+ * is needed.
+ *
+ * Configuration:
+ *   type: custom:welcome-card
+ *   name: Alex                       # Optional (default: your first name from your HA user)
+ *   weather: weather.home            # Optional: condition, temperature, today's high / low
+ *   show_forecast: true              # Optional: today's high / low (default true)
+ *   collapsible: true                # Optional: chevron that folds the buttons away (default false)
+ *   buttons:                         # Optional
+ *     - icon: mdi:home
+ *       name: House
+ *       color: blue                  # blue, red, yellow, green, purple, pink, teal, orange,
+ *                                    # white, black, grey, or a hex colour like "#ff8800"
+ *       navigation_path: /lovelace/rooms
+ *     - icon: mdi:shield
+ *       name: Secure
+ *       color: green
+ *       tap_action: { action: navigate, navigation_path: /lovelace/security }   # any HA tap_action
+ */
+
+const wcEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const WC_FORECAST_MS = 30 * 60 * 1000;
+const WC_DAILY = 1;   // WeatherEntityFeature.FORECAST_DAILY
+
+const WC_ICONS = {
+  'clear-night': 'mdi:weather-night', cloudy: 'mdi:weather-cloudy', exceptional: 'mdi:alert-circle-outline',
+  fog: 'mdi:weather-fog', hail: 'mdi:weather-hail', lightning: 'mdi:weather-lightning',
+  'lightning-rainy': 'mdi:weather-lightning-rainy', partlycloudy: 'mdi:weather-partly-cloudy',
+  pouring: 'mdi:weather-pouring', rainy: 'mdi:weather-rainy', snowy: 'mdi:weather-snowy',
+  'snowy-rainy': 'mdi:weather-snowy-rainy', sunny: 'mdi:weather-sunny', windy: 'mdi:weather-windy',
+  'windy-variant': 'mdi:weather-windy-variant',
+};
+const WC_TEXT = {
+  'clear-night': 'Clear', cloudy: 'Cloudy', exceptional: 'Exceptional', fog: 'Fog', hail: 'Hail',
+  lightning: 'Lightning', 'lightning-rainy': 'Thunderstorms', partlycloudy: 'Partly cloudy',
+  pouring: 'Pouring', rainy: 'Rain', snowy: 'Snow', 'snowy-rainy': 'Sleet', sunny: 'Sunny',
+  windy: 'Windy', 'windy-variant': 'Windy and cloudy',
+};
+
+function wcGreeting(d = new Date()) {
+  const h = d.getHours();
+  if (h >= 5 && h < 12) return 'Good morning';
+  if (h >= 12 && h < 17) return 'Good afternoon';
+  if (h >= 17 && h < 22) return 'Good evening';
+  return 'Good night';
+}
+
+class WelcomeCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._fc = null;          // { at, entity, high, low }
+    this._fcBusy = false;
+    this._warned = new Set();
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    if (!config || typeof config !== 'object') throw new Error('Invalid configuration');
+    const buttons = Array.isArray(config.buttons) ? config.buttons : [];
+    this._config = {
+      collapsible: false, show_forecast: true, ...config,
+      buttons: buttons.filter((b) => b && typeof b === 'object'),
+    };
+    this._lastHtml = null;
+    this._collapsed = this._config.collapsible ? this._loadCollapsed() : false;
+    if (this._fc && this._fc.entity !== this._config.weather) this._fc = null;
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    const w = this._config.weather;
+    const changed = !old || old.user?.name !== hass.user?.name || (w && old.states[w] !== hass.states[w]);
+    this._maybeForecast();
+    if (changed) this._render();
+  }
+
+  connectedCallback() {
+    // The greeting changes with the hour; the render guard skips no-op redraws.
+    this._tick = setInterval(() => { if (this._hass) this._render(); }, 60 * 1000);
+  }
+
+  disconnectedCallback() { clearInterval(this._tick); }
+
+  // ── Collapsed state (per browser) ────────────────────────────────────────
+  _storeKey() {
+    const c = this._config;
+    const id = c.collapse_key || [c.weather || '', ...c.buttons.map((b) => b.name || b.icon || '')].join('|');
+    return `russtum-welcome-collapsed:${id}`;
+  }
+
+  _loadCollapsed() {
+    try { return localStorage.getItem(this._storeKey()) === '1'; } catch (e) { return false; }
+  }
+
+  _saveCollapsed(v) {
+    try { localStorage.setItem(this._storeKey(), v ? '1' : '0'); } catch (e) { /* private mode etc. */ }
+  }
+
+  // ── Today's high / low ───────────────────────────────────────────────────
+  async _maybeForecast() {
+    const c = this._config, h = this._hass;
+    if (!c.weather || c.show_forecast === false || this._fcBusy || typeof h.callWS !== 'function') return;
+    const st = h.states[c.weather];
+    if (!st || !(Number(st.attributes.supported_features) & WC_DAILY)) return;
+    if (this._fc && this._fc.entity === c.weather && Date.now() - this._fc.at < WC_FORECAST_MS) return;
+    this._fcBusy = true;
+    const entity = c.weather;
+    try {
+      const res = await h.callWS({
+        type: 'call_service', domain: 'weather', service: 'get_forecasts',
+        service_data: { type: 'daily' }, target: { entity_id: entity }, return_response: true,
+      });
+      const today = res?.response?.[entity]?.forecast?.[0];
+      this._fc = { at: Date.now(), entity, high: today?.temperature, low: today?.templow };
+    } catch (e) {
+      // Not supported here (older HA, or no permission): stay quiet, retry later.
+      this._fc = { at: Date.now(), entity };
+    } finally {
+      this._fcBusy = false;
+      this._lastHtml = null;
+      this._render();
+    }
+  }
+
+  // ── Rendering ────────────────────────────────────────────────────────────
+  _warn(key, msg) {
+    if (this._warned.has(key)) return;
+    this._warned.add(key);
+    console.warn(`welcome-card: ${msg}`);
+  }
+
+  _weatherHtml() {
+    const c = this._config, h = this._hass;
+    if (!c.weather) return '';
+    const st = h.states[c.weather];
+    if (!st) {
+      this._warn(c.weather, `${c.weather} not found`);
+      return `<div class="wx na"><ha-icon icon="mdi:weather-cloudy-alert"></ha-icon><span class="cond">Weather not found</span></div>`;
+    }
+    if (st.state === 'unavailable' || st.state === 'unknown') {
+      return `<div class="wx na"><ha-icon icon="mdi:weather-cloudy-alert"></ha-icon><span class="cond">Weather unavailable</span></div>`;
+    }
+    const unit = st.attributes.temperature_unit || h.config?.unit_system?.temperature || '°';
+    const t = Number(st.attributes.temperature);
+    const temp = Number.isFinite(t) ? `${Math.round(t)}${unit}` : '';
+    let cond = WC_TEXT[st.state] || st.state;
+    try { if (typeof h.formatEntityState === 'function') cond = h.formatEntityState(st) || cond; } catch (e) { /* older HA */ }
+    const fc = this._fc && this._fc.entity === c.weather ? this._fc : null;
+    const hi = Number(fc?.high), lo = Number(fc?.low);
+    const hilo = c.show_forecast === false ? '' : [
+      Number.isFinite(hi) ? `<span aria-label="High ${Math.round(hi)} degrees">↑ ${Math.round(hi)}°</span>` : '',
+      Number.isFinite(lo) ? `<span aria-label="Low ${Math.round(lo)} degrees">↓ ${Math.round(lo)}°</span>` : '',
+    ].join('');
+    return `<button class="wx" data-act="weather" aria-label="Weather: ${wcEsc(cond)}${temp ? `, ${wcEsc(temp)}` : ''}. Show details">
+        <ha-icon icon="${WC_ICONS[st.state] || 'mdi:weather-partly-cloudy'}"></ha-icon>
+        ${temp ? `<span class="temp">${wcEsc(temp)}</span>` : ''}
+        <span class="cond">${wcEsc(cond)}</span>
+        ${hilo ? `<span class="hilo">${hilo}</span>` : ''}
+      </button>`;
+  }
+
+  _buttonsHtml() {
+    const { color } = window.RusstumShared;
+    return this._config.buttons.map((b, i) => {
+      const col = color(b.color);
+      const label = b.name || '';
+      return `<button class="nav ${col.special || ''}" data-act="button" data-i="${i}" style="--c:${col.rgb}" aria-label="${wcEsc(label || b.navigation_path || 'Button')}">
+          <span class="ic"><ha-icon icon="${wcEsc(b.icon || 'mdi:gesture-tap')}"></ha-icon></span>
+          ${label ? `<span class="lbl">${wcEsc(label)}</span>` : ''}
+        </button>`;
+    }).join('');
+  }
+
+  _render() {
+    const c = this._config, h = this._hass;
+    if (!c || !h) return;
+    const first = String(c.name || h.user?.name || '').trim().split(/\s+/)[0];
+    const greeting = `${wcGreeting()}${first ? `, ${first}` : ''}`;
+    const buttons = this._buttonsHtml();
+    const collapsible = c.collapsible && !!buttons;
+    const open = !collapsible || !this._collapsed;
+
+    const html = `
+      <style>
+        :host { display: block; min-width: 0; }
+        ha-card { padding: 16px; overflow: hidden; }
+        .top { display: flex; align-items: flex-start; gap: 8px; }
+        .greet { flex: 1; min-width: 0; margin: 0; font-size: 1.6em; line-height: 1.2; font-weight: 500;
+          color: var(--primary-text-color); overflow-wrap: anywhere; }
+        .chev { flex: none; width: 40px; height: 40px; margin: -6px -8px 0 0; border: 0; border-radius: 50%;
+          background: none; color: var(--secondary-text-color); cursor: pointer; display: grid; place-items: center; }
+        .chev ha-icon { transition: transform .25s ease; }
+        .chev.closed ha-icon { transform: rotate(-90deg); }
+        .chev:hover { background: rgba(var(--rgb-primary-text-color, 127, 127, 127), .08); }
+        .wx { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 6px; padding: 0;
+          border: 0; background: none; font: inherit; text-align: left; color: var(--secondary-text-color); cursor: pointer; }
+        .wx ha-icon { --mdc-icon-size: 22px; color: var(--primary-text-color); }
+        .wx .temp { font-weight: 600; color: var(--primary-text-color); }
+        .wx .hilo { display: inline-flex; gap: 8px; font-size: .9em; }
+        .wx.na { opacity: .5; cursor: default; }
+        .fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .25s ease; }
+        .fold.closed { grid-template-rows: 0fr; }
+        .fold > div { overflow: hidden; min-height: 0; }
+        .btns { display: grid; grid-template-columns: repeat(auto-fit, minmax(56px, 1fr)); gap: 8px; padding-top: 16px; }
+        .nav { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; padding: 4px 0;
+          border: 0; background: none; font: inherit; color: var(--primary-text-color); cursor: pointer;
+          border-radius: 12px; -webkit-tap-highlight-color: transparent; }
+        .nav .ic { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center;
+          background: rgba(var(--c), .2); color: rgb(var(--c)); transition: transform .12s ease, background .2s; }
+        .nav:hover .ic { background: rgba(var(--c), .3); }
+        .nav:active .ic { transform: scale(.92); }
+        .nav.white .ic { background: rgba(var(--c), .9); color: #4a4a4a; box-shadow: inset 0 0 0 1px var(--divider-color, rgba(0,0,0,.15)); }
+        .nav.black .ic { background: rgba(var(--c), .85); color: #f2f2f2; box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255,255,255,.2)); }
+        .nav .lbl { max-width: 100%; font-size: .8em; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+        .fold.closed button { visibility: hidden; transition: visibility 0s .25s; }
+      </style>
+      <ha-card>
+        <div class="top">
+          <h2 class="greet">${wcEsc(greeting)}</h2>
+          ${collapsible ? `<button class="chev ${open ? '' : 'closed'}" data-act="fold" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} shortcuts">
+            <ha-icon icon="mdi:chevron-down"></ha-icon></button>` : ''}
+        </div>
+        ${this._weatherHtml()}
+        ${buttons ? `<div class="fold ${open ? '' : 'closed'}"><div><div class="btns">${buttons}</div></div></div>` : ''}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('[data-act]');
+    if (!el || !this._hass) return;
+    const act = el.dataset.act;
+    if (act === 'fold') {
+      this._collapsed = !this._collapsed;
+      this._saveCollapsed(this._collapsed);
+      // Toggle classes in place so the fold animates.
+      const fold = this.shadowRoot.querySelector('.fold');
+      fold?.classList.toggle('closed', this._collapsed);
+      el.classList.toggle('closed', this._collapsed);
+      el.setAttribute('aria-expanded', String(!this._collapsed));
+      el.setAttribute('aria-label', `${this._collapsed ? 'Show' : 'Hide'} shortcuts`);
+      this._lastHtml = null;   // the next full render picks up the new state
+      return;
+    }
+    if (act === 'weather') {
+      window.RusstumShared.act(this, this._hass, { action: 'more-info' }, this._config.weather);
+      return;
+    }
+    if (act === 'button') {
+      const b = this._config.buttons[Number(el.dataset.i)];
+      if (!b) return;
+      const a = b.tap_action || (b.navigation_path ? { action: 'navigate', navigation_path: b.navigation_path } : null);
+      if (a) window.RusstumShared.act(this, this._hass, a, b.entity);
+    }
+  }
+
+  getCardSize() { return this._config?.buttons?.length && !this._collapsed ? 3 : 2; }
+
+  getGridOptions() { return { columns: 12, min_columns: 6, rows: 'auto' }; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('welcome-card-editor');
+  }
+
+  static getStubConfig(hass) {
+    const weather = Object.keys(hass?.states || {}).find((id) => id.startsWith('weather.'));
+    return {
+      ...(weather ? { weather } : {}),
+      collapsible: true,
+      buttons: [
+        { icon: 'mdi:home', name: 'Home', color: 'blue', navigation_path: '/lovelace/0' },
+        { icon: 'mdi:lightbulb', name: 'Lights', color: 'yellow', navigation_path: '/lovelace/0' },
+        { icon: 'mdi:thermostat', name: 'Heat', color: 'red', navigation_path: '/lovelace/0' },
+        { icon: 'mdi:shield', name: 'Secure', color: 'green', navigation_path: '/lovelace/0' },
+      ],
+    };
+  }
+}
+
+customElements.define('welcome-card', WelcomeCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'welcome-card',
+  name: 'Welcome Card',
+  description: 'Time-of-day greeting, the weather with today\'s high / low, and a foldable row of navigation buttons.',
+  preview: true,
+});
+
+class WelcomeCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:hand-wave', schema: [
+        f.grid(f.text('name', 'Name', 'Default: your first name'), f.entity('weather', 'Weather', '', 'weather')),
+        f.grid(f.toggle('show_forecast', 'Show today\'s high / low', 'Default: on'), f.toggle('collapsible', 'Buttons can fold away', 'Remembered per browser')),
+      ] },
+      { title: 'Buttons', icon: 'mdi:gesture-tap-button', list: {
+        key: 'buttons',
+        collapsible: true,
+        label: (b, i) => b.name || `Button ${i + 1}`,
+        newItem: () => ({ icon: 'mdi:home', color: 'blue' }),
+        addLabel: 'Add button',
+        schema: [
+          f.grid(f.text('name', 'Name'), f.icon('icon')),
+          f.grid(f.select('color', 'Colour', window.RusstumShared.COLOR_OPTIONS, 'Or a hex colour, e.g. #ff8800'),
+            f.text('navigation_path', 'Opens', 'e.g. /lovelace/rooms')),
+          { name: 'tap_action', label: 'Tap action (instead of Opens)', selector: { ui_action: {} } },
+        ],
+      } },
+    ];
+  }
+}
+
+customElements.define('welcome-card-editor', WelcomeCardEditor);
+})();
+
+// ═══ src/scenes-card.js ═══
+(() => {
+/**
+ * Scenes Card for Home Assistant
+ *
+ * One row of round, coloured buttons with a label under each. Tapping one
+ * activates the scene (or runs the script, or toggles anything else) and the
+ * button pulses to confirm. Up to about eight fit across; more scroll
+ * sideways on narrow phones instead of wrapping.
+ *
+ * Configuration:
+ *   type: custom:scenes-card
+ *   title: Movie room                # Optional
+ *   scenes:
+ *     - entity: scene.movie_room_bright
+ *       name: Warm                   # Optional (default: the entity's name)
+ *       icon: mdi:heat-wave          # Optional (default: the entity's icon, else mdi:palette)
+ *       color: red                   # blue, red, yellow, green, purple, pink, teal, orange,
+ *                                    # white, black, grey, or a hex colour like "#ff8800"
+ *     - entity: script.movie_night
+ *       tap_action: { action: more-info }   # Optional: any HA tap_action
+ *
+ * Default tap: scene.turn_on for scenes, script.turn_on for scripts, toggle for anything else.
+ */
+
+const scEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const scItem = (v) => (typeof v === 'string' ? { entity: v } : v && typeof v === 'object' ? v : null);
+
+class ScenesCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._warned = new Set();
+    this.shadowRoot.addEventListener('click', (ev) => this._onClick(ev));
+  }
+
+  setConfig(config) {
+    if (!config || !Array.isArray(config.scenes)) throw new Error('Add a list of scenes, e.g. scenes: [scene.movie_time]');
+    this._config = { ...config, scenes: config.scenes.map(scItem).filter((s) => s && s.entity) };
+    this._lastHtml = null;
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    const ids = this._config.scenes.map((s) => s.entity);
+    if (old && ids.every((id) => old.states[id] === hass.states[id])) return;
+    this._render();
+  }
+
+  _render() {
+    const c = this._config, h = this._hass;
+    if (!c || !h) return;
+    const { color } = window.RusstumShared;
+    const items = c.scenes.map((s, i) => {
+      const st = h.states[s.entity];
+      if (!st && !this._warned.has(s.entity)) { this._warned.add(s.entity); console.warn(`scenes-card: ${s.entity} not found`); }
+      const na = !st || st.state === 'unavailable';
+      const name = s.name || st?.attributes?.friendly_name || s.entity;
+      const icon = s.icon || st?.attributes?.icon || 'mdi:palette';
+      const col = color(s.color);
+      return `<button class="sc ${col.special || ''} ${na ? 'na' : ''}" data-i="${i}" style="--c:${col.rgb}"
+          aria-label="${scEsc(name)}${na ? ' (unavailable)' : ''}" ${na ? 'aria-disabled="true"' : ''} title="${scEsc(name)}">
+          <span class="ic"><ha-icon icon="${scEsc(icon)}"></ha-icon></span>
+          <span class="lbl">${scEsc(name)}</span>
+        </button>`;
+    }).join('');
+
+    const html = `
+      <style>
+        :host { display: block; min-width: 0; }
+        ha-card { padding: 12px 8px; overflow: hidden; }
+        .title { margin: 0 8px 8px; font-size: 1.1em; font-weight: 500; color: var(--primary-text-color); }
+        .row { display: flex; gap: 4px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding: 0 4px;
+          scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+        .row::-webkit-scrollbar { display: none; }
+        .sc { flex: 1 0 60px; min-width: 60px; scroll-snap-align: start; display: flex; flex-direction: column;
+          align-items: center; gap: 6px; padding: 4px 2px; border: 0; background: none; font: inherit;
+          color: var(--primary-text-color); cursor: pointer; border-radius: 12px; -webkit-tap-highlight-color: transparent; }
+        .ic { position: relative; width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
+          background: rgba(var(--c), .2); color: rgb(var(--c)); transition: transform .12s ease, background .2s; }
+        .ic ha-icon { --mdc-icon-size: 24px; }
+        .sc:hover .ic { background: rgba(var(--c), .3); }
+        .sc:active .ic { transform: scale(.9); }
+        .sc.white .ic { background: rgba(var(--c), .92); color: #4a4a4a; box-shadow: inset 0 0 0 1px var(--divider-color, rgba(0,0,0,.15)); }
+        .sc.black .ic { background: rgba(var(--c), .85); color: #f2f2f2; box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255,255,255,.2)); }
+        .ic::after { content: ''; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+          box-shadow: 0 0 0 0 rgba(var(--c), .55); }
+        .sc.black .ic::after { box-shadow: 0 0 0 0 rgba(var(--rgb-primary-text-color, 128, 128, 128), .5); }
+        .sc.fired .ic::after { animation: sc-pulse .7s ease-out; }
+        .sc.fired .ic { animation: sc-pop .35s ease-out; }
+        @keyframes sc-pulse { from { box-shadow: 0 0 0 0 rgba(var(--c), .55); } to { box-shadow: 0 0 0 14px rgba(var(--c), 0); } }
+        @keyframes sc-pop { 50% { transform: scale(1.08); } }
+        .lbl { max-width: 100%; font-size: .78em; font-weight: 500; line-height: 1.2; overflow: hidden;
+          text-overflow: ellipsis; white-space: nowrap; }
+        .sc.na { opacity: .4; cursor: default; }
+        .sc:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+        @media (prefers-reduced-motion: reduce) { .sc.fired .ic, .sc.fired .ic::after { animation: none; } }
+        .empty { padding: 8px; color: var(--secondary-text-color); }
+      </style>
+      <ha-card>
+        ${c.title ? `<h2 class="title">${scEsc(c.title)}</h2>` : ''}
+        ${items ? `<div class="row" role="group" aria-label="${scEsc(c.title || 'Scenes')}">${items}</div>`
+          : '<div class="empty">No scenes configured</div>'}
+      </ha-card>`;
+    if (html === this._lastHtml) return;
+    this._lastHtml = html;
+    this.shadowRoot.innerHTML = html;
+  }
+
+  _onClick(ev) {
+    const el = ev.target.closest('.sc[data-i]');
+    if (!el || !this._hass || el.classList.contains('na')) return;
+    const s = this._config.scenes[Number(el.dataset.i)];
+    if (!s) return;
+    if (s.tap_action) {
+      window.RusstumShared.act(this, this._hass, s.tap_action, s.entity);
+    } else {
+      const domain = s.entity.split('.')[0];
+      if (domain === 'scene' || domain === 'script') this._hass.callService(domain, 'turn_on', { entity_id: s.entity });
+      else this._hass.callService('homeassistant', 'toggle', { entity_id: s.entity });
+    }
+    // Scenes have no on/off state, so confirm the tap with a short pulse.
+    el.classList.remove('fired');
+    void el.offsetWidth;   // restart the animation on repeat taps
+    el.classList.add('fired');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('fired'), 800);
+  }
+
+  getCardSize() { return this._config?.title ? 3 : 2; }
+
+  getGridOptions() { return { columns: 12, min_columns: 4, rows: 'auto' }; }
+
+  static async getConfigElement() {
+    await window.RusstumEditor.ensureHaForm();
+    return document.createElement('scenes-card-editor');
+  }
+
+  static getStubConfig(hass) {
+    const palette = ['blue', 'red', 'yellow', 'green', 'purple', 'pink'];
+    const found = Object.keys(hass?.states || {}).filter((id) => id.startsWith('scene.')).slice(0, 5);
+    return { scenes: found.map((entity, i) => ({ entity, color: palette[i % palette.length] })) };
+  }
+}
+
+customElements.define('scenes-card', ScenesCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'scenes-card',
+  name: 'Scenes Card',
+  description: 'A row of round, coloured scene buttons with labels. Tap to activate, with a short pulse to confirm.',
+  preview: true,
+});
+
+class ScenesCardEditor extends window.RusstumEditor {
+  _sections() {
+    const { f } = window.RusstumEditor;
+    return [
+      { title: 'General', icon: 'mdi:palette', schema: [f.text('title', 'Title', 'Optional')] },
+      { title: 'Scenes', icon: 'mdi:palette-swatch', list: {
+        key: 'scenes',
+        collapsible: true,
+        label: (s, i) => s.name || s.entity || `Scene ${i + 1}`,
+        newItem: () => ({ color: 'blue' }),
+        addLabel: 'Add scene',
+        schema: [
+          { name: 'entity', label: 'Scene, script or entity', selector: { entity: {} } },
+          f.grid(f.text('name', 'Name', 'Default: the entity\'s name'), f.icon('icon')),
+          f.select('color', 'Colour', window.RusstumShared.COLOR_OPTIONS, 'Or a hex colour, e.g. #ff8800'),
+          { name: 'tap_action', label: 'Tap action (default: activate)', selector: { ui_action: {} } },
+        ],
+      } },
+    ];
+  }
+}
+
+customElements.define('scenes-card-editor', ScenesCardEditor);
+})();
+
+console.info('%c RUSSTUM-CARDS %c NAS · UPS · Media · Minecraft · Docker · Device Monitor · Sonarr Upcoming · Download Queue · Printer · Media · Security · Parcels · Flights · EV · Batteries · Komodo · Services · HA Health · Rooms · Climate · Kitchen · Bins · Travel · Lights On · Family · Floor Lights · Vehicles · Internet · Theater · Welcome · Scenes ', 'color:#fff;background:#1976d2;font-weight:700;padding:2px 6px;border-radius:3px 0 0 3px', 'color:#1976d2;background:rgba(25,118,210,0.1);font-weight:600;padding:2px 6px;border-radius:0 3px 3px 0');

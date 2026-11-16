@@ -696,6 +696,70 @@ sound_modes: [MOVIE, MUSIC, STEREO, AUTO, DIRECT]
 
 ---
 
+## Welcome Card
+
+A greeting for the time of day (**"Good evening, Alex"**, from your Home Assistant user's first name), the **current weather** (condition icon, temperature, condition) with **today's high / low**, and an optional row of **navigation buttons**: rounded tiles with a tinted icon and a label. With `collapsible: true` a chevron folds the buttons away; that's remembered per browser, so no helper entity is needed. Tap the weather for its details.
+
+Works with any theme, light or dark, and fits a phone-width column. No other custom cards needed.
+
+```yaml
+type: custom:welcome-card
+weather: weather.home
+collapsible: true
+buttons:
+  - {icon: mdi:home,       name: House,  color: blue,   navigation_path: /lovelace/rooms}
+  - {icon: mdi:lightbulb,  name: Lights, color: yellow, navigation_path: /lovelace/lighting}
+  - {icon: mdi:thermostat, name: Heat,   color: red,    navigation_path: /lovelace/climate}
+  - {icon: mdi:shield,     name: Secure, color: green,  navigation_path: /lovelace/security}
+  - {icon: mdi:nas,        name: Lab,    color: purple, navigation_path: /lovelace/servers}
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `name` | your first name | Name in the greeting |
+| `weather` | — | A `weather.*` entity. Shows icon, temperature and condition |
+| `show_forecast` | `true` | Today's high / low (from `weather.get_forecasts`, refreshed every 30 min; skipped if the entity has no daily forecast) |
+| `collapsible` | `false` | Chevron that folds the buttons away, remembered per browser |
+| `buttons` | — | List of buttons, below |
+| `buttons[].icon` | `mdi:gesture-tap` | Any icon, including custom icon sets |
+| `buttons[].name` | — | Label under the tile |
+| `buttons[].color` | `blue` | A named colour (see below) or hex like `"#ff8800"` |
+| `buttons[].navigation_path` | — | Where a tap goes, e.g. `/lovelace/rooms` |
+| `buttons[].tap_action` | — | Any HA tap action instead (`navigate`, `url`, `perform-action`, `more-info`, `toggle`, `none`) |
+
+Greeting times: morning 5–12, afternoon 12–17, evening 17–22, night otherwise.
+
+---
+
+## Scenes Card
+
+One row of **round, coloured buttons** with a label under each; tap one to activate it. Scenes have no on/off state, so the button **pulses** to confirm. Up to about eight fit across; on a narrow phone the row **scrolls sideways** (snapping, no scrollbar) instead of wrapping. Unavailable or missing entities are dimmed.
+
+```yaml
+type: custom:scenes-card
+scenes:
+  - {entity: scene.movie_room_energize,         name: Energize, icon: mdi:brightness-1, color: blue}
+  - {entity: scene.movie_room_bright,           name: Warm,     icon: mdi:heat-wave,    color: red}
+  - {entity: scene.movie_room_just_bar,         name: Bar,      icon: mdi:beer,         color: yellow}
+  - {entity: scene.movie_room_regular_movie,    name: Movie,    icon: mdi:movie,        color: black}
+  - {entity: scene.movie_room_forest_adventure, name: Forest,   icon: mdi:tree,         color: green}
+  - {entity: scene.movie_room_city_of_love,     name: Love,     icon: mdi:heart,        color: pink}
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `title` | — | Optional heading |
+| `scenes` | required | List of buttons, below. A plain entity ID also works |
+| `scenes[].entity` | required | A scene, script or any toggleable entity |
+| `scenes[].name` | entity's name | Label under the button |
+| `scenes[].icon` | entity's icon, else `mdi:palette` | Any icon, including custom sets such as `phu:` (custom-brand-icons) |
+| `scenes[].color` | `blue` | A named colour (see below) or hex |
+| `scenes[].tap_action` | activate | Any HA tap action. Default: `scene.turn_on`, `script.turn_on`, or toggle for other entities |
+
+**Colours** (both cards): `blue, red, yellow, green, purple, pink, teal, orange, white, black, grey`, plus `amber, cyan, indigo, lime, brown, light-blue, light-green, deep-orange, deep-purple`. They use your theme's `--rgb-*-color` values when it sets them. `white` gets an outline and a dark icon so it shows on light themes; `black` gets an outline and a light icon so it shows on dark themes. Hex colours work too.
+
+---
+
 ## Development
 
 Edit the cards in `src/` and push to `master`. The **Build bundle** GitHub Action rebuilds `russtum-cards.js` from `src/` and commits it for you, so don't edit the bundle by hand. Run `git pull` before your next push to pick up that commit.
