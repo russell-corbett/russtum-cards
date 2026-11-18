@@ -170,7 +170,7 @@ class VehiclesCard extends HTMLElement {
 
   _art(car, charging) {
     const c = car.cfg;
-    if (c.image) return `<div class="art photo"><img src="${vcEsc(c.image)}" alt="">${charging ? '<span class="bolt"><ha-icon icon="mdi:lightning-bolt"></ha-icon></span>' : ''}</div>`;
+    if (c.image) return `<div class="art photo"><img src="${vcEsc(window.RusstumShared.resolveImageUrl(this._hass, c.image))}" alt="">${charging ? '<span class="bolt"><ha-icon icon="mdi:lightning-bolt"></ha-icon></span>' : ''}</div>`;
     const s = VC_SHAPES[car.body];
     const paint = vcEsc(c.color || 'var(--vc-paint)');
     const pillars = s.pillars.map((x) => `<rect x="${x}" y="${s.win[0]}" width="2.4" height="${s.win[1] - s.win[0]}" fill="${paint}"/>`).join('');

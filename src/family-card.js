@@ -163,7 +163,7 @@ class FamilyCard extends HTMLElement {
     return `
       <div class="p ${zone.kind} ${homeward ? 'homeward' : ''}" data-i="${this._people.indexOf(p)}" title="${fmEsc(`${name}: ${status}`)}">
         <div class="av">
-          ${a.entity_picture ? `<img src="${fmEsc(a.entity_picture)}" alt="">` : `<ha-icon icon="mdi:account"></ha-icon>`}
+          ${a.entity_picture ? `<img src="${fmEsc(window.RusstumShared.resolveImageUrl(h, a.entity_picture))}" alt="">` : `<ha-icon icon="mdi:account"></ha-icon>`}
           <span class="zb"><ha-icon icon="${fmEsc(homeward ? 'mdi:home-import-outline' : zone.icon)}"></ha-icon></span>
         </div>
         <div class="pb">

@@ -188,7 +188,7 @@ class TheaterCard extends HTMLElement {
     const a = pl?.attributes || {};
     const playing = pl?.state === 'playing', paused = pl?.state === 'paused';
     const anyOn = this._anyOn();
-    const art = (playing || paused) ? a.entity_picture : null;
+    const art = (playing || paused) ? (window.RusstumShared.resolveImageUrl(h, a.entity_picture) || null) : null;
     let kicker, title, sub;
     if (!anyOn) { kicker = ''; title = 'Off'; sub = 'Pick a source to start'; }
     else if (playing || paused) {

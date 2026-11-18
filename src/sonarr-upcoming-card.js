@@ -179,7 +179,7 @@ class SonarrUpcomingCard extends HTMLElement {
   _episodeHtml(ep) {
     const showPoster   = this._config?.show_poster   !== false;
     const showOverview = this._config?.show_overview  === true;
-    const poster       = ep.images?.poster;
+    const poster       = window.RusstumShared.resolveImageUrl(this._hass, ep.images?.poster);
 
     const isReady   = ep.has_file;
     const finaleMap = { season: 'Season Finale', series: 'Series Finale', mid_season: 'Mid-Season Finale' };

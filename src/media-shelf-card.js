@@ -128,7 +128,7 @@ class MediaShelfCard extends HTMLElement {
     const res = await this._hass.callWS(msg);
     return (res?.children || []).slice(0, Number(row.limit) || 20).map((c) => {
       const { title, sub } = msSplit(c.title);
-      return { title, sub, img: c.thumbnail || '', icon: c.media_class === 'movie' ? 'mdi:movie-open' : 'mdi:television-classic', id: c.media_content_id, type: c.media_content_type, entity };
+      return { title, sub, img: window.RusstumShared.resolveImageUrl(this._hass, c.thumbnail), icon: c.media_class === 'movie' ? 'mdi:movie-open' : 'mdi:television-classic', id: c.media_content_id, type: c.media_content_type, entity };
     });
   }
 

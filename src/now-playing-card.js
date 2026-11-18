@@ -63,8 +63,8 @@ function npInfo(hass, item) {
 
   const who = jelly && a.user_name ? a.user_name : '';
   const room = item.name || a.device_name || String(a.friendly_name || item.entity).replace(/^JellyHA User\s+/i, '');
-  const art = a.entity_picture || a.image_url || a.entity_picture_local || '';
-  const backdrop = a.backdrop_url || a.entity_picture || a.image_url || '';
+  const art = window.RusstumShared.resolveImageUrl(hass, a.entity_picture || a.image_url || a.entity_picture_local);
+  const backdrop = window.RusstumShared.resolveImageUrl(hass, a.backdrop_url || a.entity_picture || a.image_url);
 
   // Progress: seconds when we have them, else a bare percentage.
   let pos = null, dur = null, pct = null;

@@ -3,6 +3,7 @@
  *
  *   RusstumShared.color('blue')      → { rgb, solid }  CSS for a named colour or hex
  *   RusstumShared.act(el, hass, action, entity)        run a tap_action
+ *   RusstumShared.resolveImageUrl(hass, url)           absolute URL for an HA image path
  *
  * Colours: named colours use HA's theme variables (--rgb-blue-color …) so
  * themes can restyle them, with Material fallbacks when a theme doesn't set
@@ -85,5 +86,20 @@
     }
   }
 
-  window.RusstumShared = { color, COLOR_OPTIONS, act };
+  // HA image paths (entity_picture, /api/image/serve/…, /local/…) are relative
+  // to Home Assistant. On a cast display the page is served from
+  // cast.home-assistant.io, so they must be made absolute or they break.
+  function resolveImageUrl(hass, url) {
+    if (!url) return '';
+    const s = String(url).trim();
+    if (!s) return '';
+    if (/^(https?:|data:|blob:)/i.test(s) || s.startsWith('//')) return s;
+    const path = s.startsWith('/') ? s : `/${s}`;
+    try {
+      if (typeof hass?.hassUrl === 'function') return hass.hassUrl(path);
+    } catch (e) { /* fall through */ }
+    return s;
+  }
+
+  window.RusstumShared = { color, COLOR_OPTIONS, act, resolveImageUrl };
 })();

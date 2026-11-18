@@ -139,7 +139,7 @@ class RoomRemoteCard extends HTMLElement {
     const on = !['off', 'standby', ...RR_NA].includes(st.state);
     const title = on ? (a.media_series_title || a.media_title || a.app_name || (st.state === 'idle' ? 'Ready' : 'On')) : (RR_NA.includes(st.state) ? 'Unavailable' : 'Off');
     const sub = on ? [a.media_series_title ? a.media_title : a.media_artist, a.app_name && a.app_name !== title ? a.app_name : ''].filter(Boolean).join(' · ') : '';
-    const art = on ? a.entity_picture : '';
+    const art = on ? window.RusstumShared.resolveImageUrl(this._hass, a.entity_picture) : '';
     const pct = m.dur ? (m.pos / m.dur) * 100 : null;
     return `<button class="now ${on ? '' : 'off'}" data-act="more" data-e="${rrEsc(st.entity_id)}" aria-label="${rrEsc(`${title}${sub ? `, ${sub}` : ''}. Details`)}">
         ${art ? `<img class="poster" src="${rrEsc(art)}" alt="">` : `<div class="poster ph"><ha-icon icon="${on ? 'mdi:play-circle-outline' : 'mdi:power-standby'}"></ha-icon></div>`}

@@ -108,7 +108,7 @@ class ActiveMediaCard extends HTMLElement {
   _art(st) {
     const pic = st.attributes.entity_picture_local || st.attributes.entity_picture;
     if (!pic) return null;
-    return this._hass.hassUrl && pic.startsWith('/') ? this._hass.hassUrl(pic) : pic;
+    return window.RusstumShared.resolveImageUrl(this._hass, pic) || null;
   }
 
   _render() {

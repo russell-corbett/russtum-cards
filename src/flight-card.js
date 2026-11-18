@@ -95,7 +95,7 @@ class FlightCard extends HTMLElement {
       return `
         <div class="fl">
           <div class="fh">
-            ${photo ? `<img class="ph" src="${flEsc(photo)}" alt="" loading="lazy">` : '<ha-icon icon="mdi:airplane"></ha-icon>'}
+            ${photo ? `<img class="ph" src="${flEsc(window.RusstumShared.resolveImageUrl(this._hass, photo))}" alt="" loading="lazy">` : '<ha-icon icon="mdi:airplane"></ha-icon>'}
             <div class="fhb">
               <div><span class="fno">${flEsc(fl.flight_number || fl.callsign)}</span>
                    <span class="fsub">${flEsc(fl.airline_short || fl.airline || '')}</span></div>

@@ -212,7 +212,7 @@ class DownloadQueueCard extends HTMLElement {
 
   _itemHtml(item, type) {
     const showPoster = this._config?.show_poster !== false;
-    const poster     = item.images?.poster ?? item.images?.fanart ?? null;
+    const poster     = window.RusstumShared.resolveImageUrl(this._hass, item.images?.poster ?? item.images?.fanart) || null;
 
     // Title
     const mainTitle = item.title || 'Unknown';

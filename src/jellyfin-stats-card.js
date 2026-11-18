@@ -193,7 +193,7 @@ class JellyfinStatsCard extends HTMLElement {
     if (!st) return '';
     const a = st.attributes || {};
     const na = JS_NA.includes(st.state);
-    const poster = a.series_poster_url || a.poster_url || '';
+    const poster = window.RusstumShared.resolveImageUrl(this._hass, a.series_poster_url || a.poster_url);
     const title = kind === 'episode' ? (a.series_name || st.state) : (a.title || a.name || st.state);
     const sub = kind === 'episode'
       ? [a.season != null && a.episode != null ? `S${a.season}E${String(a.episode).padStart(2, '0')}` : '', a.episode_name].filter(Boolean).join(' · ')
