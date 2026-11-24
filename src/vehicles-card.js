@@ -283,7 +283,8 @@ class VehiclesCard extends HTMLElement {
         .bolt { position: absolute; right: -4px; top: -6px; width: 16px; height: 16px; border-radius: 50%;
           background: var(--success-color, #4caf50); color: #fff; display: grid; place-items: center;
           animation: vc-pulse 1.6s ease-in-out infinite; }
-        .bolt ha-icon { --mdc-icon-size: 12px; }
+        /* ha-icon is inline by default, so the line box pushes it off-centre. */
+        .bolt ha-icon { --mdc-icon-size: 12px; display: flex; width: 12px; height: 12px; line-height: 0; }
         @keyframes vc-pulse { 50% { box-shadow: 0 0 0 4px rgba(76,175,80,.25); } }
         .main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
         .top { display: flex; align-items: center; gap: 6px; min-width: 0; }
